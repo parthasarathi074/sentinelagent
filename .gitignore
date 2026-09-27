@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# IDEs / editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs / runtime data
+*.log
+logs/
+
+# Data and experiment outputs
+outputs/
+artifacts/
+mlruns/
+*.db
+*.sqlite
+*.sqlite3
+
+# Build/package artifacts
+build/
+dist/
+*.egg-info/
+
+# Docker/local runtime overrides
+docker-compose.override.yml
