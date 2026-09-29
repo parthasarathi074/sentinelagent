@@ -1,6 +1,7 @@
 import unittest
 
 from sentinelagent.edge import SentinelEdge
+from sentinelagent.event_stream import EventStream
 from sentinelagent.models import (
     AgentRecord,
     AgentStatus,
@@ -74,6 +75,25 @@ class TestSentinelEdge(unittest.TestCase):
             self.events[0]["decision"],
             "ALLOW",
         )
+    def test_event_is_published_to_event_stream(self) -> None:
+        stream = EventStream()
+
+        edge = SentinelEdge(
+            registry=self.registry,
+            event_sink=stream.publish,
+        )
+
+        request = self.make_request()
+
+        result = edge.handle(request)
+
+        self.assertEqual(result.decision, EdgeDecision.ALLOW)
+        self.assertEqual(stream.size(), 1)
+
+        events = stream.consume_batch(1)
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event_id"], request.request_id)
 
     def test_unauthorized_permission_is_denied(self) -> None:
         result = self.edge.handle(
