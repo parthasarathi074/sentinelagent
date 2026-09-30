@@ -1,5 +1,6 @@
 import unittest
 
+from sentinelagent.analysis import AnalysisEngine
 from sentinelagent.batch_worker import BatchWorker
 
 
@@ -25,6 +26,27 @@ class TestBatchWorker(unittest.TestCase):
 
         self.assertEqual(result, "analysis-complete")
         self.assertEqual(processed_batches, [batch])
+
+    def test_batch_worker_can_use_analysis_engine(self):
+        engine = AnalysisEngine()
+
+        worker = BatchWorker(
+            batch_handler=engine.analyze,
+        )
+
+        batch = [
+            {"event_id": "event-101"},
+            {"event_id": "event-102"},
+            {"event_id": "event-103"},
+        ]
+
+        result = worker.process(batch)
+
+        self.assertEqual(result["event_count"], 3)
+        self.assertEqual(
+            result["event_ids"],
+            ["event-101", "event-102", "event-103"],
+        )
 
     def test_empty_batch_is_rejected(self):
         worker = BatchWorker(
