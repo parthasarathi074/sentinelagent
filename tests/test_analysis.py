@@ -32,6 +32,38 @@ class TestAnalysisEngine(unittest.TestCase):
             ["event-1", "event-2"],
         )
 
+    def test_analyze_counts_events_by_source_runtime(self):
+        engine = AnalysisEngine()
+
+        batch = [
+            {
+                "event_id": "event-1",
+                "source_runtime_id": "runtime-A",
+            },
+            {
+                "event_id": "event-2",
+                "source_runtime_id": "runtime-B",
+            },
+            {
+                "event_id": "event-3",
+                "source_runtime_id": "runtime-A",
+            },
+            {
+                "event_id": "event-4",
+                "source_runtime_id": "runtime-A",
+            },
+        ]
+
+        result = engine.analyze(batch)
+
+        self.assertEqual(
+            result["events_by_source_runtime"],
+            {
+                "runtime-A": 3,
+                "runtime-B": 1,
+            },
+        )
+
     def test_analyze_empty_batch(self):
         engine = AnalysisEngine()
 
