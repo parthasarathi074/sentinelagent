@@ -299,6 +299,91 @@ class TestAnalysisEngine(unittest.TestCase):
             {},
         )
 
+    def test_analyze_returns_low_risk_for_normal_runtime(self):
+        engine = AnalysisEngine()
+
+        result = engine.analyze([
+            {
+                "event_id": "event-1",
+                "source_runtime_id": "runtime-validator-001",
+                "target_runtime_id": "runtime-data-001",
+                "timestamp": "2026-01-01T10:00:00+00:00",
+            }
+        ])
+
+        self.assertIn("runtime_risk_assessments", result)
+
+        assessment = result["runtime_risk_assessments"][
+            "runtime-validator-001"
+        ]
+
+        self.assertEqual(assessment["risk_score"], 0)
+        self.assertEqual(assessment["risk_level"], "LOW")
+        self.assertEqual(assessment["reasons"], [])
+
+    def test_analyze_assigns_medium_risk_for_repeated_interactions(self):
+        engine = AnalysisEngine()
+
+        batch = [
+            {
+                "event_id": f"event-{i}",
+                "source_runtime_id": "runtime-validator-001",
+                "target_runtime_id": "runtime-data-001",
+                "timestamp": f"2026-01-01T10:00:0{i}+00:00",
+            }
+            for i in range(1, 3)
+        ]
+
+        result = engine.analyze(batch)
+        assessment = result["runtime_risk_assessments"][
+            "runtime-validator-001"
+        ]
+
+        self.assertEqual(assessment["risk_score"], 20)
+        self.assertEqual(assessment["risk_level"], "MEDIUM")
+        self.assertIn(
+            "REPEATED_TARGET_INTERACTIONS",
+            assessment["reasons"],
+        )
+
+    def test_analyze_assigns_high_risk_for_repeated_shared_target(self):
+        engine = AnalysisEngine()
+
+        batch = [
+            {
+                "event_id": f"event-{i}",
+                "source_runtime_id": source,
+                "target_runtime_id": "runtime-data-001",
+                "timestamp": f"2026-01-01T10:00:0{i}+00:00",
+            }
+            for source in (
+                "runtime-validator-001",
+                "runtime-validator-001",
+                "runtime-auditor-001",
+                "runtime-auditor-001",
+            )
+            for i in range(1, 3)
+        ]
+
+        result = engine.analyze(batch)
+
+        for runtime_id in (
+            "runtime-validator-001",
+            "runtime-auditor-001",
+        ):
+            assessment = result["runtime_risk_assessments"][runtime_id]
+
+            self.assertEqual(assessment["risk_score"], 50)
+            self.assertEqual(assessment["risk_level"], "HIGH")
+            self.assertIn(
+                "REPEATED_TARGET_INTERACTIONS",
+                assessment["reasons"],
+            )
+            self.assertIn(
+                "SHARED_TARGET_INTERACTIONS",
+                assessment["reasons"],
+            )
+
     def test_analyze_empty_batch(self):
         engine = AnalysisEngine()
 

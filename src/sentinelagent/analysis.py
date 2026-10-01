@@ -136,6 +136,46 @@ class AnalysisEngine:
             if len(source_interactions) > 1
         }
 
+        runtime_risk_assessments: dict[str, dict[str, Any]] = {}
+
+        all_runtime_ids = set(events_by_source_runtime)
+
+        for source_runtime_id in all_runtime_ids:
+            risk_score = 0
+            reasons: list[str] = []
+
+            repeated_targets = repeated_runtime_interactions.get(
+                source_runtime_id, {}
+            )
+
+            if repeated_targets:
+                risk_score += 20
+                reasons.append("REPEATED_TARGET_INTERACTIONS")
+
+            shared_targets = [
+                target_runtime_id
+                for target_runtime_id, source_interactions
+                in shared_target_interactions.items()
+                if source_runtime_id in source_interactions
+            ]
+
+            if shared_targets:
+                risk_score += 30
+                reasons.append("SHARED_TARGET_INTERACTIONS")
+
+            if risk_score >= 50:
+                risk_level = "HIGH"
+            elif risk_score >= 20:
+                risk_level = "MEDIUM"
+            else:
+                risk_level = "LOW"
+
+            runtime_risk_assessments[source_runtime_id] = {
+                "risk_score": risk_score,
+                "risk_level": risk_level,
+                "reasons": reasons,
+            }
+
         return {
             "event_count": len(batch),
             "event_ids": [
@@ -148,4 +188,5 @@ class AnalysisEngine:
             "shared_target_interactions": shared_target_interactions,
             "runtime_activity_windows": runtime_activity_windows,
             "runtime_event_rates": runtime_event_rates,
+            "runtime_risk_assessments": runtime_risk_assessments,
         }
