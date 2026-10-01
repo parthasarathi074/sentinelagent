@@ -106,6 +106,42 @@ class TestAnalysisEngine(unittest.TestCase):
             },
         )
 
+    def test_analyze_calculates_runtime_event_rate(self):
+        engine = AnalysisEngine()
+
+        batch = [
+            {
+                "event_id": "event-1",
+                "source_runtime_id": "runtime-A",
+                "timestamp": "2026-01-01T10:00:01Z",
+            },
+            {
+                "event_id": "event-2",
+                "source_runtime_id": "runtime-A",
+                "timestamp": "2026-01-01T10:00:03Z",
+            },
+            {
+                "event_id": "event-3",
+                "source_runtime_id": "runtime-A",
+                "timestamp": "2026-01-01T10:00:05Z",
+            },
+            {
+                "event_id": "event-4",
+                "source_runtime_id": "runtime-B",
+                "timestamp": "2026-01-01T10:00:02Z",
+            },
+        ]
+
+        result = engine.analyze(batch)
+
+        self.assertEqual(
+            result["runtime_event_rates"],
+            {
+                "runtime-A": 0.75,
+                "runtime-B": 0.0,
+            },
+        )
+
     def test_analyze_empty_batch(self):
         engine = AnalysisEngine()
 

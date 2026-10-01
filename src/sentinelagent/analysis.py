@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any
 
 
@@ -10,6 +11,7 @@ class AnalysisEngine:
     - records event IDs
     - counts events by source runtime
     - tracks runtime activity windows
+    - calculates runtime event rates
 
     More advanced behavioral, temporal, graph, and collusion
     analysis will be added later.
@@ -25,6 +27,7 @@ class AnalysisEngine:
             - event IDs
             - event counts grouped by source runtime
             - first and last event timestamps for each runtime
+            - observed event rate for each runtime
         """
         events_by_source_runtime: dict[str, int] = {}
         runtime_activity_windows: dict[str, dict[str, str]] = {}
@@ -58,6 +61,33 @@ class AnalysisEngine:
                 if timestamp > current_window["last_event_timestamp"]:
                     current_window["last_event_timestamp"] = timestamp
 
+        runtime_event_rates: dict[str, float] = {}
+
+        for source_runtime_id, count in events_by_source_runtime.items():
+            activity_window = runtime_activity_windows.get(source_runtime_id)
+
+            if activity_window is None:
+                runtime_event_rates[source_runtime_id] = 0.0
+                continue
+
+            first_timestamp = datetime.fromisoformat(
+                activity_window["first_event_timestamp"].replace("Z", "+00:00")
+            )
+            last_timestamp = datetime.fromisoformat(
+                activity_window["last_event_timestamp"].replace("Z", "+00:00")
+            )
+
+            duration_seconds = (
+                last_timestamp - first_timestamp
+            ).total_seconds()
+
+            if duration_seconds <= 0:
+                runtime_event_rates[source_runtime_id] = 0.0
+            else:
+                runtime_event_rates[source_runtime_id] = (
+                    count / duration_seconds
+                )
+
         return {
             "event_count": len(batch),
             "event_ids": [
@@ -66,4 +96,5 @@ class AnalysisEngine:
             ],
             "events_by_source_runtime": events_by_source_runtime,
             "runtime_activity_windows": runtime_activity_windows,
+            "runtime_event_rates": runtime_event_rates,
         }
