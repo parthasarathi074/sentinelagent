@@ -64,6 +64,48 @@ class TestAnalysisEngine(unittest.TestCase):
             },
         )
 
+    def test_analyze_tracks_runtime_activity_window(self):
+        engine = AnalysisEngine()
+
+        batch = [
+            {
+                "event_id": "event-1",
+                "source_runtime_id": "runtime-A",
+                "timestamp": "2026-01-01T10:00:01Z",
+            },
+            {
+                "event_id": "event-2",
+                "source_runtime_id": "runtime-A",
+                "timestamp": "2026-01-01T10:00:03Z",
+            },
+            {
+                "event_id": "event-3",
+                "source_runtime_id": "runtime-B",
+                "timestamp": "2026-01-01T10:00:02Z",
+            },
+            {
+                "event_id": "event-4",
+                "source_runtime_id": "runtime-A",
+                "timestamp": "2026-01-01T10:00:05Z",
+            },
+        ]
+
+        result = engine.analyze(batch)
+
+        self.assertEqual(
+            result["runtime_activity_windows"],
+            {
+                "runtime-A": {
+                    "first_event_timestamp": "2026-01-01T10:00:01Z",
+                    "last_event_timestamp": "2026-01-01T10:00:05Z",
+                },
+                "runtime-B": {
+                    "first_event_timestamp": "2026-01-01T10:00:02Z",
+                    "last_event_timestamp": "2026-01-01T10:00:02Z",
+                },
+            },
+        )
+
     def test_analyze_empty_batch(self):
         engine = AnalysisEngine()
 
