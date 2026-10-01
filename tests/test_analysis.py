@@ -160,6 +160,39 @@ class TestAnalysisEngine(unittest.TestCase):
             2 / 1800,
         )
 
+    def test_invalid_timestamp_does_not_abort_batch_analysis(self):
+        events = [
+            {
+                "event_id": "event-valid",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+                "timestamp": "2026-10-01T10:00:00Z",
+            },
+            {
+                "event_id": "event-invalid",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+                "timestamp": "not-a-timestamp",
+            },
+        ]
+        result = AnalysisEngine().analyze(events)
+
+        self.assertEqual(result["event_count"], 2)
+        self.assertEqual(result["event_ids"], ["event-valid", "event-invalid"])
+        self.assertEqual(
+            result["runtime_target_interactions"]["runtime-A"]["runtime-B"],
+            2,
+        )
+        window = result["runtime_activity_windows"]["runtime-A"]
+        self.assertEqual(
+            window["first_event_timestamp"],
+            "2026-10-01T10:00:00+00:00",
+        )
+        self.assertEqual(
+            window["last_event_timestamp"],
+            "2026-10-01T10:00:00+00:00",
+        )
+
     def test_analyze_calculates_runtime_event_rate(self):
         engine = AnalysisEngine()
 

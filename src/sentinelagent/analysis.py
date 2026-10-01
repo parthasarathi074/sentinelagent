@@ -7,6 +7,7 @@ def _parse_timestamp(timestamp: str) -> datetime:
 
     Timestamps without timezone information are interpreted as UTC.
     Timestamps with timezone information are converted to UTC.
+    Invalid timestamps raise ValueError for the caller to handle.
     """
     parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
 
@@ -78,7 +79,11 @@ class AnalysisEngine:
             if timestamp is None:
                 continue
 
-            parsed_timestamp = _parse_timestamp(timestamp)
+            try:
+                parsed_timestamp = _parse_timestamp(timestamp)
+            except (ValueError, TypeError, AttributeError):
+                continue
+
             normalized_timestamp = parsed_timestamp.isoformat()
 
             if source_runtime_id not in runtime_activity_windows:
