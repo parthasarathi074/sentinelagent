@@ -1,5 +1,6 @@
 import unittest
 
+from sentinelagent.batch_worker import BatchWorker
 from sentinelagent.cross_batch import CrossBatchAnalyzer
 
 
@@ -276,6 +277,44 @@ def test_rejects_blank_batch_id():
         pass
     else:
         raise AssertionError("Expected blank batch_id to raise ValueError")
+
+
+def test_batch_worker_passes_batch_id_to_handler():
+    received = []
+
+    def handler(batch, batch_id=None):
+        received.append((batch, batch_id))
+
+    worker = BatchWorker(handler)
+    batch = [{"event_id": "event-001"}]
+    worker.process(batch, batch_id="batch-001")
+
+    assert received == [(batch, "batch-001")]
+
+
+def test_retry_with_same_batch_id_does_not_double_count():
+    analyzer = CrossBatchAnalyzer()
+
+    def handler(batch, batch_id=None):
+        analyzer.process_batch(
+            {
+                "runtime_target_interactions": {
+                    "runtime-A": {"runtime-B": len(batch)}
+                }
+            },
+            batch_id=batch_id,
+        )
+
+    worker = BatchWorker(handler)
+    batch = [{"event_id": "event-001"}, {"event_id": "event-002"}]
+    worker.process(batch, batch_id="batch-001")
+    worker.process(batch, batch_id="batch-001")
+    result = analyzer.snapshot()
+
+    assert result["batches_processed"] == 1
+    assert result["runtime_target_interactions"] == {
+        "runtime-A": {"runtime-B": 2}
+    }
 
 
 if __name__ == "__main__":
