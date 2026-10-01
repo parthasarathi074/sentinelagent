@@ -39,6 +39,54 @@ class TestCrossBatchAnalyzer(unittest.TestCase):
             },
         )
 
+    def test_assesses_medium_risk_for_repeated_interactions_across_batches(self):
+        analyzer = CrossBatchAnalyzer()
+        analyzer.process_batch({
+            "runtime_target_interactions": {
+                "runtime-A": {"runtime-B": 1}
+            }
+        })
+        analyzer.process_batch({
+            "runtime_target_interactions": {
+                "runtime-A": {"runtime-B": 1}
+            }
+        })
+
+        result = analyzer.snapshot()
+        assessment = result["runtime_risk_assessments"]["runtime-A"]
+
+        self.assertEqual(assessment["risk_score"], 20)
+        self.assertEqual(assessment["risk_level"], "MEDIUM")
+        self.assertIn(
+            "REPEATED_TARGET_INTERACTIONS",
+            assessment["reasons"],
+        )
+
+    def test_assesses_high_risk_for_repeated_shared_target_across_batches(self):
+        analyzer = CrossBatchAnalyzer()
+        for _ in range(2):
+            analyzer.process_batch({
+                "runtime_target_interactions": {
+                    "runtime-A": {"runtime-C": 1},
+                    "runtime-B": {"runtime-C": 1},
+                }
+            })
+
+        result = analyzer.snapshot()
+
+        for runtime_id in ("runtime-A", "runtime-B"):
+            assessment = result["runtime_risk_assessments"][runtime_id]
+            self.assertEqual(assessment["risk_score"], 50)
+            self.assertEqual(assessment["risk_level"], "HIGH")
+            self.assertIn(
+                "REPEATED_TARGET_INTERACTIONS",
+                assessment["reasons"],
+            )
+            self.assertIn(
+                "SHARED_TARGET_INTERACTIONS",
+                assessment["reasons"],
+            )
+
     def test_does_not_flag_target_used_by_only_one_runtime(self):
         analyzer = CrossBatchAnalyzer()
         analyzer.process_batch({
@@ -111,6 +159,21 @@ class TestCrossBatchAnalyzer(unittest.TestCase):
                         "runtime-B": 1,
                     },
                 },
+                "runtime_risk_assessments": {
+                    "runtime-A": {
+                        "risk_score": 50,
+                        "risk_level": "HIGH",
+                        "reasons": [
+                            "REPEATED_TARGET_INTERACTIONS",
+                            "SHARED_TARGET_INTERACTIONS",
+                        ],
+                    },
+                    "runtime-B": {
+                        "risk_score": 30,
+                        "risk_level": "MEDIUM",
+                        "reasons": ["SHARED_TARGET_INTERACTIONS"],
+                    },
+                },
             },
         )
 
@@ -157,6 +220,13 @@ class TestCrossBatchAnalyzer(unittest.TestCase):
                     "runtime-A": {"runtime-D": 2},
                 },
                 "shared_target_interactions": {},
+                "runtime_risk_assessments": {
+                    "runtime-A": {
+                        "risk_score": 20,
+                        "risk_level": "MEDIUM",
+                        "reasons": ["REPEATED_TARGET_INTERACTIONS"],
+                    },
+                },
             },
         )
 
