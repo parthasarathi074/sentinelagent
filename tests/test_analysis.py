@@ -142,6 +142,47 @@ class TestAnalysisEngine(unittest.TestCase):
             },
         )
 
+    def test_analyze_tracks_runtime_target_interactions(self):
+        engine = AnalysisEngine()
+
+        batch = [
+            {
+                "event_id": "event-1",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+            },
+            {
+                "event_id": "event-2",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+            },
+            {
+                "event_id": "event-3",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-C",
+            },
+            {
+                "event_id": "event-4",
+                "source_runtime_id": "runtime-B",
+                "target_runtime_id": "runtime-C",
+            },
+        ]
+
+        result = engine.analyze(batch)
+
+        self.assertEqual(
+            result["runtime_target_interactions"],
+            {
+                "runtime-A": {
+                    "runtime-B": 2,
+                    "runtime-C": 1,
+                },
+                "runtime-B": {
+                    "runtime-C": 1,
+                },
+            },
+        )
+
     def test_analyze_empty_batch(self):
         engine = AnalysisEngine()
 

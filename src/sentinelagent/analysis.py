@@ -10,6 +10,7 @@ class AnalysisEngine:
     - counts events
     - records event IDs
     - counts events by source runtime
+    - counts interactions between source and target runtimes
     - tracks runtime activity windows
     - calculates runtime event rates
 
@@ -26,10 +27,12 @@ class AnalysisEngine:
             - the total event count
             - event IDs
             - event counts grouped by source runtime
+            - interaction counts grouped by source and target runtime
             - first and last event timestamps for each runtime
             - observed event rate for each runtime
         """
         events_by_source_runtime: dict[str, int] = {}
+        runtime_target_interactions: dict[str, dict[str, int]] = {}
         runtime_activity_windows: dict[str, dict[str, str]] = {}
 
         for event in batch:
@@ -41,6 +44,16 @@ class AnalysisEngine:
             events_by_source_runtime[source_runtime_id] = (
                 events_by_source_runtime.get(source_runtime_id, 0) + 1
             )
+
+            target_runtime_id = event.get("target_runtime_id")
+
+            if target_runtime_id is not None:
+                interactions = runtime_target_interactions.setdefault(
+                    source_runtime_id, {}
+                )
+                interactions[target_runtime_id] = (
+                    interactions.get(target_runtime_id, 0) + 1
+                )
 
             timestamp = event.get("timestamp")
 
@@ -95,6 +108,7 @@ class AnalysisEngine:
                 for event in batch
             ],
             "events_by_source_runtime": events_by_source_runtime,
+            "runtime_target_interactions": runtime_target_interactions,
             "runtime_activity_windows": runtime_activity_windows,
             "runtime_event_rates": runtime_event_rates,
         }
