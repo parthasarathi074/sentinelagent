@@ -7,9 +7,21 @@ class CrossBatchAnalyzer:
     def __init__(self) -> None:
         self._interaction_counts: dict[str, dict[str, int]] = {}
         self._batches_processed = 0
+        self._processed_batch_ids: set[str] = set()
 
-    def process_batch(self, analysis_result: dict[str, Any]) -> None:
+    def process_batch(
+        self,
+        analysis_result: dict[str, Any],
+        batch_id: str | None = None,
+    ) -> None:
         """Add interaction evidence from one batch analysis result."""
+        if batch_id is not None:
+            if not isinstance(batch_id, str) or not batch_id.strip():
+                raise ValueError("batch_id must be a non-empty string")
+            if batch_id in self._processed_batch_ids:
+                return
+            self._processed_batch_ids.add(batch_id)
+
         interactions = analysis_result.get("runtime_target_interactions", {})
 
         if isinstance(interactions, dict):

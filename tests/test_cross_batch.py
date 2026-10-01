@@ -231,5 +231,52 @@ class TestCrossBatchAnalyzer(unittest.TestCase):
         )
 
 
+def test_ignores_duplicate_batch_id():
+    analyzer = CrossBatchAnalyzer()
+    batch = {
+        "runtime_target_interactions": {
+            "runtime-A": {"runtime-B": 3}
+        }
+    }
+    analyzer.process_batch(batch, batch_id="batch-001")
+    analyzer.process_batch(batch, batch_id="batch-001")
+    result = analyzer.snapshot()
+    assert result["batches_processed"] == 1
+    assert result["runtime_target_interactions"] == {
+        "runtime-A": {"runtime-B": 3}
+    }
+
+
+def test_processes_identical_content_with_different_batch_ids():
+    analyzer = CrossBatchAnalyzer()
+    batch = {
+        "runtime_target_interactions": {
+            "runtime-A": {"runtime-B": 3}
+        }
+    }
+    analyzer.process_batch(batch, batch_id="batch-001")
+    analyzer.process_batch(batch, batch_id="batch-002")
+    result = analyzer.snapshot()
+    assert result["batches_processed"] == 2
+    assert result["runtime_target_interactions"] == {
+        "runtime-A": {"runtime-B": 6}
+    }
+
+
+def test_rejects_blank_batch_id():
+    analyzer = CrossBatchAnalyzer()
+    batch = {
+        "runtime_target_interactions": {
+            "runtime-A": {"runtime-B": 1}
+        }
+    }
+    try:
+        analyzer.process_batch(batch, batch_id=" ")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Expected blank batch_id to raise ValueError")
+
+
 if __name__ == "__main__":
     unittest.main()
