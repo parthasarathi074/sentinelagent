@@ -53,8 +53,21 @@ class AnalysisEngine:
         events_by_source_runtime: dict[str, int] = {}
         runtime_target_interactions: dict[str, dict[str, int]] = {}
         runtime_activity_windows: dict[str, dict[str, str]] = {}
+        event_ids: list[str] = []
+        invalid_events = 0
 
         for event in batch:
+            if not isinstance(event, dict):
+                invalid_events += 1
+                continue
+
+            event_id = event.get("event_id")
+
+            if not isinstance(event_id, str) or not event_id.strip():
+                invalid_events += 1
+            else:
+                event_ids.append(event_id)
+
             source_runtime_id = event.get("source_runtime_id")
 
             if source_runtime_id is None:
@@ -210,10 +223,8 @@ class AnalysisEngine:
 
         return {
             "event_count": len(batch),
-            "event_ids": [
-                event["event_id"]
-                for event in batch
-            ],
+            "event_ids": event_ids,
+            "invalid_events": invalid_events,
             "events_by_source_runtime": events_by_source_runtime,
             "runtime_target_interactions": runtime_target_interactions,
             "repeated_runtime_interactions": repeated_runtime_interactions,

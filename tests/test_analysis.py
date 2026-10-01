@@ -193,6 +193,54 @@ class TestAnalysisEngine(unittest.TestCase):
             "2026-10-01T10:00:00+00:00",
         )
 
+    def test_missing_event_id_is_reported_without_aborting_batch(self):
+        events = [
+            {
+                "event_id": "event-valid",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+                "timestamp": "2026-10-01T10:00:00Z",
+            },
+            {
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+                "timestamp": "2026-10-01T10:00:01Z",
+            },
+        ]
+        result = AnalysisEngine().analyze(events)
+
+        self.assertEqual(result["event_count"], 2)
+        self.assertEqual(result["event_ids"], ["event-valid"])
+        self.assertEqual(result["invalid_events"], 1)
+        self.assertEqual(
+            result["runtime_target_interactions"]["runtime-A"]["runtime-B"],
+            2,
+        )
+
+    def test_non_dictionary_event_is_reported_without_aborting_batch(self):
+        events = [
+            {
+                "event_id": "event-valid",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+                "timestamp": "2026-10-01T10:00:00Z",
+            },
+            None,
+        ]
+        result = AnalysisEngine().analyze(events)
+
+        self.assertEqual(result["event_count"], 2)
+        self.assertEqual(result["event_ids"], ["event-valid"])
+        self.assertEqual(result["invalid_events"], 1)
+        self.assertEqual(
+            result["events_by_source_runtime"],
+            {"runtime-A": 1},
+        )
+        self.assertEqual(
+            result["runtime_target_interactions"]["runtime-A"]["runtime-B"],
+            1,
+        )
+
     def test_analyze_calculates_runtime_event_rate(self):
         engine = AnalysisEngine()
 
