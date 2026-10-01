@@ -11,6 +11,7 @@ class AnalysisEngine:
     - records event IDs
     - counts events by source runtime
     - counts interactions between source and target runtimes
+    - identifies repeated interactions between source and target runtimes
     - tracks runtime activity windows
     - calculates runtime event rates
 
@@ -28,6 +29,7 @@ class AnalysisEngine:
             - event IDs
             - event counts grouped by source runtime
             - interaction counts grouped by source and target runtime
+            - repeated interactions grouped by source and target runtime
             - first and last event timestamps for each runtime
             - observed event rate for each runtime
         """
@@ -101,6 +103,20 @@ class AnalysisEngine:
                     count / duration_seconds
                 )
 
+        repeated_runtime_interactions: dict[str, dict[str, int]] = {}
+
+        for source_runtime_id, interactions in runtime_target_interactions.items():
+            repeated_interactions = {
+                target_runtime_id: count
+                for target_runtime_id, count in interactions.items()
+                if count > 1
+            }
+
+            if repeated_interactions:
+                repeated_runtime_interactions[source_runtime_id] = (
+                    repeated_interactions
+                )
+
         return {
             "event_count": len(batch),
             "event_ids": [
@@ -109,6 +125,7 @@ class AnalysisEngine:
             ],
             "events_by_source_runtime": events_by_source_runtime,
             "runtime_target_interactions": runtime_target_interactions,
+            "repeated_runtime_interactions": repeated_runtime_interactions,
             "runtime_activity_windows": runtime_activity_windows,
             "runtime_event_rates": runtime_event_rates,
         }
