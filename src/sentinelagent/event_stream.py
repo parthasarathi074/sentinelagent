@@ -40,3 +40,8 @@ class EventStream:
             batch.append(self._events.popleft())
 
         return batch
+
+    def restore_batch(self, batch: list[Any]) -> None:
+        """Restore a consumed batch to the front, preserving its order."""
+        for event in reversed(batch):
+            self._events.appendleft(event)

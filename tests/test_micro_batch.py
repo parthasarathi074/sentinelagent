@@ -215,6 +215,44 @@ class TestMicroBatchProcessor(unittest.TestCase):
 
         self.assertEqual(stream.size(), 0)
 
+    def test_failed_handler_restores_batch_for_retry(self):
+        stream = EventStream()
+        attempts = []
+
+        def handler(batch):
+            attempts.append(batch)
+            if len(attempts) == 1:
+                raise RuntimeError("simulated analysis failure")
+
+        processor = MicroBatchProcessor(
+            event_stream=stream,
+            batch_size=2,
+            batch_handler=handler,
+        )
+
+        stream.publish({"event_id": "event-1"})
+        stream.publish({"event_id": "event-2"})
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "simulated analysis failure",
+        ):
+            processor.process_once()
+
+        self.assertEqual(stream.size(), 2)
+
+        result = processor.process_once()
+
+        self.assertEqual(
+            result,
+            [
+                {"event_id": "event-1"},
+                {"event_id": "event-2"},
+            ],
+        )
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(stream.size(), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

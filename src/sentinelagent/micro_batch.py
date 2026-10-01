@@ -69,7 +69,12 @@ class MicroBatchProcessor:
         batch = self.event_stream.consume_batch(self.batch_size)
 
         if batch:
-            self.batch_handler(batch)
+            try:
+                self.batch_handler(batch)
+            except Exception:
+                self.event_stream.restore_batch(batch)
+                self._batch_started_at = None
+                raise
 
         if self.event_stream.size() == 0:
             self._batch_started_at = None

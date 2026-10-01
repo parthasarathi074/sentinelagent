@@ -61,6 +61,23 @@ class TestEventStream(unittest.TestCase):
         with self.assertRaises(ValueError):
             stream.consume_batch(0)
 
+    def test_restore_batch_preserves_order_at_front(self):
+        stream = EventStream()
+        stream.publish({"event_id": "event-3"})
+        stream.restore_batch([
+            {"event_id": "event-1"},
+            {"event_id": "event-2"},
+        ])
+
+        self.assertEqual(
+            stream.consume_batch(3),
+            [
+                {"event_id": "event-1"},
+                {"event_id": "event-2"},
+                {"event_id": "event-3"},
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -115,6 +115,57 @@ class TestAgentRegistry(unittest.TestCase):
             new_agent.credentials_reference,
         )
 
+    def test_second_active_runtime_for_same_logical_agent_is_rejected(self) -> None:
+        second_runtime = AgentRecord(
+            logical_agent_id="agent-A",
+            runtime_agent_id="runtime-A-002",
+            role="ingest",
+            version="1.0",
+            permissions={"message:send"},
+            allowed_targets={"agent-B"},
+            credentials_reference="cred-A-002",
+            status=AgentStatus.ACTIVE,
+        )
+
+        with self.assertRaisesRegex(ValueError, "already has an ACTIVE runtime"):
+            self.registry.register(second_runtime)
+
+    def test_quarantined_runtime_cannot_be_reactivated(self) -> None:
+        self.registry.quarantine("runtime-B-001")
+
+        with self.assertRaisesRegex(ValueError, "cannot be directly reactivated"):
+            self.registry.activate("runtime-B-001")
+
+    def test_quarantined_source_cannot_communicate(self) -> None:
+        self.registry.quarantine("runtime-A-001")
+
+        allowed, reason = self.registry.is_authorized(
+            source_runtime_id="runtime-A-001",
+            target_runtime_id="runtime-B-001",
+            requested_permission="message:send",
+        )
+
+        self.assertFalse(allowed)
+        self.assertIn("Source agent is not ACTIVE", reason)
+
+    def test_replacement_requires_quarantined_runtime(self) -> None:
+        with self.assertRaisesRegex(ValueError, "only be created for a quarantined"):
+            self.registry.create_replacement(
+                quarantined_runtime_id="runtime-B-001",
+                new_runtime_id="runtime-B-002",
+                new_credentials_reference="cred-B-002",
+            )
+
+    def test_replacement_rejects_existing_runtime_id(self) -> None:
+        self.registry.quarantine("runtime-B-001")
+
+        with self.assertRaisesRegex(ValueError, "already exists"):
+            self.registry.create_replacement(
+                quarantined_runtime_id="runtime-B-001",
+                new_runtime_id="runtime-A-001",
+                new_credentials_reference="cred-B-002",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
