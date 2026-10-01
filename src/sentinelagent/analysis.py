@@ -70,7 +70,11 @@ class AnalysisEngine:
 
             source_runtime_id = event.get("source_runtime_id")
 
-            if source_runtime_id is None:
+            if (
+                not isinstance(source_runtime_id, str)
+                or not source_runtime_id.strip()
+            ):
+                invalid_events += 1
                 continue
 
             events_by_source_runtime[source_runtime_id] = (
@@ -80,12 +84,18 @@ class AnalysisEngine:
             target_runtime_id = event.get("target_runtime_id")
 
             if target_runtime_id is not None:
-                interactions = runtime_target_interactions.setdefault(
-                    source_runtime_id, {}
-                )
-                interactions[target_runtime_id] = (
-                    interactions.get(target_runtime_id, 0) + 1
-                )
+                if (
+                    not isinstance(target_runtime_id, str)
+                    or not target_runtime_id.strip()
+                ):
+                    invalid_events += 1
+                else:
+                    interactions = runtime_target_interactions.setdefault(
+                        source_runtime_id, {}
+                    )
+                    interactions[target_runtime_id] = (
+                        interactions.get(target_runtime_id, 0) + 1
+                    )
 
             timestamp = event.get("timestamp")
 

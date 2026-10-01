@@ -241,6 +241,64 @@ class TestAnalysisEngine(unittest.TestCase):
             1,
         )
 
+    def test_invalid_source_runtime_id_is_reported_without_aborting_batch(self):
+        batch = [
+            {
+                "event_id": "event-valid",
+                "source_runtime_id": "runtime-a",
+                "target_runtime_id": "runtime-b",
+                "timestamp": "2026-01-01T00:00:00Z",
+            },
+            {
+                "event_id": "event-invalid",
+                "source_runtime_id": [],
+                "target_runtime_id": "runtime-b",
+                "timestamp": "2026-01-01T00:00:01Z",
+            },
+        ]
+
+        result = AnalysisEngine().analyze(batch)
+
+        self.assertEqual(result["event_count"], 2)
+        self.assertEqual(
+            result["event_ids"],
+            ["event-valid", "event-invalid"],
+        )
+        self.assertEqual(result["invalid_events"], 1)
+        self.assertEqual(
+            result["events_by_source_runtime"],
+            {"runtime-a": 1},
+        )
+
+    def test_invalid_target_runtime_id_is_reported_without_aborting_batch(self):
+        batch = [
+            {
+                "event_id": "event-valid",
+                "source_runtime_id": "runtime-a",
+                "target_runtime_id": "runtime-b",
+                "timestamp": "2026-01-01T00:00:00Z",
+            },
+            {
+                "event_id": "event-invalid",
+                "source_runtime_id": "runtime-a",
+                "target_runtime_id": [],
+                "timestamp": "2026-01-01T00:00:01Z",
+            },
+        ]
+
+        result = AnalysisEngine().analyze(batch)
+
+        self.assertEqual(result["event_count"], 2)
+        self.assertEqual(result["invalid_events"], 1)
+        self.assertEqual(
+            result["events_by_source_runtime"],
+            {"runtime-a": 2},
+        )
+        self.assertEqual(
+            result["runtime_target_interactions"],
+            {"runtime-a": {"runtime-b": 1}},
+        )
+
     def test_analyze_calculates_runtime_event_rate(self):
         engine = AnalysisEngine()
 
