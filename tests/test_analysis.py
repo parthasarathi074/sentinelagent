@@ -1,9 +1,34 @@
 import unittest
+from datetime import datetime, timezone
 
-from sentinelagent.analysis import AnalysisEngine
+from sentinelagent.analysis import AnalysisEngine, _parse_timestamp
 
 
 class TestAnalysisEngine(unittest.TestCase):
+    def test_parse_naive_timestamp_as_utc(self):
+        parsed = _parse_timestamp("2026-10-01T10:00:00")
+
+        self.assertEqual(
+            parsed,
+            datetime(2026, 10, 1, 10, 0, 0, tzinfo=timezone.utc),
+        )
+
+    def test_parse_z_timestamp_as_utc(self):
+        parsed = _parse_timestamp("2026-10-01T10:00:00Z")
+
+        self.assertEqual(
+            parsed,
+            datetime(2026, 10, 1, 10, 0, 0, tzinfo=timezone.utc),
+        )
+
+    def test_parse_offset_timestamp_as_utc(self):
+        parsed = _parse_timestamp("2026-10-01T15:30:00+05:30")
+
+        self.assertEqual(
+            parsed,
+            datetime(2026, 10, 1, 10, 0, 0, tzinfo=timezone.utc),
+        )
+
     def test_analyze_counts_events(self):
         engine = AnalysisEngine()
 
@@ -96,14 +121,43 @@ class TestAnalysisEngine(unittest.TestCase):
             result["runtime_activity_windows"],
             {
                 "runtime-A": {
-                    "first_event_timestamp": "2026-01-01T10:00:01Z",
-                    "last_event_timestamp": "2026-01-01T10:00:05Z",
+                    "first_event_timestamp": "2026-01-01T10:00:01+00:00",
+                    "last_event_timestamp": "2026-01-01T10:00:05+00:00",
                 },
                 "runtime-B": {
-                    "first_event_timestamp": "2026-01-01T10:00:02Z",
-                    "last_event_timestamp": "2026-01-01T10:00:02Z",
+                    "first_event_timestamp": "2026-01-01T10:00:02+00:00",
+                    "last_event_timestamp": "2026-01-01T10:00:02+00:00",
                 },
             },
+        )
+
+    def test_activity_window_normalizes_different_timezone_offsets(self):
+        engine = AnalysisEngine()
+        result = engine.analyze([
+            {
+                "event_id": "event-later",
+                "source_runtime_id": "runtime-A",
+                "timestamp": "2026-10-01T12:00:00+02:00",
+            },
+            {
+                "event_id": "event-earlier",
+                "source_runtime_id": "runtime-A",
+                "timestamp": "2026-10-01T10:30:00Z",
+            },
+        ])
+
+        window = result["runtime_activity_windows"]["runtime-A"]
+        self.assertEqual(
+            window["first_event_timestamp"],
+            "2026-10-01T10:00:00+00:00",
+        )
+        self.assertEqual(
+            window["last_event_timestamp"],
+            "2026-10-01T10:30:00+00:00",
+        )
+        self.assertAlmostEqual(
+            result["runtime_event_rates"]["runtime-A"],
+            2 / 1800,
         )
 
     def test_analyze_calculates_runtime_event_rate(self):

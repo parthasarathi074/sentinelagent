@@ -1,5 +1,19 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
+
+
+def _parse_timestamp(timestamp: str) -> datetime:
+    """Parse an ISO 8601 timestamp and normalize it to UTC.
+
+    Timestamps without timezone information are interpreted as UTC.
+    Timestamps with timezone information are converted to UTC.
+    """
+    parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+
+    return parsed.astimezone(timezone.utc)
 
 
 class AnalysisEngine:
@@ -64,19 +78,32 @@ class AnalysisEngine:
             if timestamp is None:
                 continue
 
+            parsed_timestamp = _parse_timestamp(timestamp)
+            normalized_timestamp = parsed_timestamp.isoformat()
+
             if source_runtime_id not in runtime_activity_windows:
                 runtime_activity_windows[source_runtime_id] = {
-                    "first_event_timestamp": timestamp,
-                    "last_event_timestamp": timestamp,
+                    "first_event_timestamp": normalized_timestamp,
+                    "last_event_timestamp": normalized_timestamp,
                 }
             else:
                 current_window = runtime_activity_windows[source_runtime_id]
+                first_timestamp = _parse_timestamp(
+                    current_window["first_event_timestamp"]
+                )
+                last_timestamp = _parse_timestamp(
+                    current_window["last_event_timestamp"]
+                )
 
-                if timestamp < current_window["first_event_timestamp"]:
-                    current_window["first_event_timestamp"] = timestamp
+                if parsed_timestamp < first_timestamp:
+                    current_window["first_event_timestamp"] = (
+                        normalized_timestamp
+                    )
 
-                if timestamp > current_window["last_event_timestamp"]:
-                    current_window["last_event_timestamp"] = timestamp
+                if parsed_timestamp > last_timestamp:
+                    current_window["last_event_timestamp"] = (
+                        normalized_timestamp
+                    )
 
         runtime_event_rates: dict[str, float] = {}
 
@@ -87,11 +114,11 @@ class AnalysisEngine:
                 runtime_event_rates[source_runtime_id] = 0.0
                 continue
 
-            first_timestamp = datetime.fromisoformat(
-                activity_window["first_event_timestamp"].replace("Z", "+00:00")
+            first_timestamp = _parse_timestamp(
+                activity_window["first_event_timestamp"]
             )
-            last_timestamp = datetime.fromisoformat(
-                activity_window["last_event_timestamp"].replace("Z", "+00:00")
+            last_timestamp = _parse_timestamp(
+                activity_window["last_event_timestamp"]
             )
 
             duration_seconds = (
