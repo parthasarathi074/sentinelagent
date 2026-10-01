@@ -228,6 +228,77 @@ class TestAnalysisEngine(unittest.TestCase):
             },
         )
 
+    def test_analyze_identifies_shared_targets_across_runtimes(self):
+        engine = AnalysisEngine()
+
+        batch = [
+            {
+                "event_id": "event-1",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-C",
+            },
+            {
+                "event_id": "event-2",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-C",
+            },
+            {
+                "event_id": "event-3",
+                "source_runtime_id": "runtime-B",
+                "target_runtime_id": "runtime-C",
+            },
+            {
+                "event_id": "event-4",
+                "source_runtime_id": "runtime-B",
+                "target_runtime_id": "runtime-C",
+            },
+            {
+                "event_id": "event-5",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-D",
+            },
+        ]
+
+        result = engine.analyze(batch)
+
+        self.assertEqual(
+            result["shared_target_interactions"],
+            {
+                "runtime-C": {
+                    "runtime-A": 2,
+                    "runtime-B": 2,
+                },
+            },
+        )
+
+    def test_shared_target_requires_repeated_interactions_from_each_source(self):
+        engine = AnalysisEngine()
+
+        batch = [
+            {
+                "event_id": "event-1",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-C",
+            },
+            {
+                "event_id": "event-2",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-C",
+            },
+            {
+                "event_id": "event-3",
+                "source_runtime_id": "runtime-B",
+                "target_runtime_id": "runtime-C",
+            },
+        ]
+
+        result = engine.analyze(batch)
+
+        self.assertEqual(
+            result["shared_target_interactions"],
+            {},
+        )
+
     def test_analyze_empty_batch(self):
         engine = AnalysisEngine()
 

@@ -12,6 +12,7 @@ class AnalysisEngine:
     - counts events by source runtime
     - counts interactions between source and target runtimes
     - identifies repeated interactions between source and target runtimes
+    - identifies targets shared across source runtimes
     - tracks runtime activity windows
     - calculates runtime event rates
 
@@ -30,6 +31,7 @@ class AnalysisEngine:
             - event counts grouped by source runtime
             - interaction counts grouped by source and target runtime
             - repeated interactions grouped by source and target runtime
+            - shared targets grouped by target and source runtime
             - first and last event timestamps for each runtime
             - observed event rate for each runtime
         """
@@ -117,6 +119,23 @@ class AnalysisEngine:
                     repeated_interactions
                 )
 
+        target_source_interactions: dict[str, dict[str, int]] = {}
+
+        for source_runtime_id, interactions in runtime_target_interactions.items():
+            for target_runtime_id, count in interactions.items():
+                if count <= 1:
+                    continue
+
+                target_source_interactions.setdefault(target_runtime_id, {})[
+                    source_runtime_id
+                ] = count
+
+        shared_target_interactions = {
+            target_runtime_id: source_interactions
+            for target_runtime_id, source_interactions in target_source_interactions.items()
+            if len(source_interactions) > 1
+        }
+
         return {
             "event_count": len(batch),
             "event_ids": [
@@ -126,6 +145,7 @@ class AnalysisEngine:
             "events_by_source_runtime": events_by_source_runtime,
             "runtime_target_interactions": runtime_target_interactions,
             "repeated_runtime_interactions": repeated_runtime_interactions,
+            "shared_target_interactions": shared_target_interactions,
             "runtime_activity_windows": runtime_activity_windows,
             "runtime_event_rates": runtime_event_rates,
         }
