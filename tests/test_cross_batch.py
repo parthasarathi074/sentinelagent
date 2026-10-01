@@ -4,6 +4,56 @@ from sentinelagent.cross_batch import CrossBatchAnalyzer
 
 
 class TestCrossBatchAnalyzer(unittest.TestCase):
+    def test_detects_shared_target_across_batches(self):
+        analyzer = CrossBatchAnalyzer()
+        analyzer.process_batch({
+            "runtime_target_interactions": {
+                "runtime-A": {"runtime-C": 1}
+            }
+        })
+        analyzer.process_batch({
+            "runtime_target_interactions": {
+                "runtime-B": {"runtime-C": 1}
+            }
+        })
+        analyzer.process_batch({
+            "runtime_target_interactions": {
+                "runtime-A": {"runtime-C": 1}
+            }
+        })
+        analyzer.process_batch({
+            "runtime_target_interactions": {
+                "runtime-B": {"runtime-C": 1}
+            }
+        })
+
+        result = analyzer.snapshot()
+
+        self.assertEqual(
+            result["shared_target_interactions"],
+            {
+                "runtime-C": {
+                    "runtime-A": 2,
+                    "runtime-B": 2,
+                }
+            },
+        )
+
+    def test_does_not_flag_target_used_by_only_one_runtime(self):
+        analyzer = CrossBatchAnalyzer()
+        analyzer.process_batch({
+            "runtime_target_interactions": {
+                "runtime-A": {"runtime-C": 3}
+            }
+        })
+
+        result = analyzer.snapshot()
+
+        self.assertEqual(
+            result["shared_target_interactions"],
+            {},
+        )
+
     def test_detects_repeated_interaction_across_batches(self):
         analyzer = CrossBatchAnalyzer()
         analyzer.process_batch({
@@ -55,6 +105,12 @@ class TestCrossBatchAnalyzer(unittest.TestCase):
                 "repeated_runtime_interactions": {
                     "runtime-A": {"runtime-B": 2},
                 },
+                "shared_target_interactions": {
+                    "runtime-C": {
+                        "runtime-A": 1,
+                        "runtime-B": 1,
+                    },
+                },
             },
         )
 
@@ -100,6 +156,7 @@ class TestCrossBatchAnalyzer(unittest.TestCase):
                 "repeated_runtime_interactions": {
                     "runtime-A": {"runtime-D": 2},
                 },
+                "shared_target_interactions": {},
             },
         )
 
