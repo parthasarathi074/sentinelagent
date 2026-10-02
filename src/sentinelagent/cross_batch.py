@@ -20,7 +20,6 @@ class CrossBatchAnalyzer:
                 raise ValueError("batch_id must be a non-empty string")
             if batch_id in self._processed_batch_ids:
                 return
-            self._processed_batch_ids.add(batch_id)
 
         interactions = analysis_result.get("runtime_target_interactions", {})
 
@@ -57,6 +56,8 @@ class CrossBatchAnalyzer:
                     )
 
         self._batches_processed += 1
+        if batch_id is not None:
+            self._processed_batch_ids.add(batch_id)
 
     def snapshot(self) -> dict[str, Any]:
         """Return accumulated interaction evidence and risk assessments."""

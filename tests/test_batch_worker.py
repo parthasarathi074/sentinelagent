@@ -217,6 +217,80 @@ class TestBatchWorker(unittest.TestCase):
 
         self.assertEqual(pipeline.snapshot(), initial_snapshot)
 
+    def test_pipeline_retries_batch_after_analysis_failure(self):
+        pipeline = AnalysisPipeline()
+        original_analyze = pipeline.analysis_engine.analyze
+        attempts = 0
+
+        def fail_once(batch):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("temporary analysis failure")
+            return original_analyze(batch)
+
+        pipeline.analysis_engine.analyze = fail_once
+        batch = [
+            {
+                "event_id": "event-retry",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+            }
+        ]
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "temporary analysis failure",
+        ):
+            pipeline.process(batch, batch_id="batch-retry")
+
+        result = pipeline.process(batch, batch_id="batch-retry")
+
+        self.assertEqual(result["event_count"], 1)
+        self.assertEqual(attempts, 2)
+        snapshot = pipeline.snapshot()
+        self.assertEqual(snapshot["batches_processed"], 1)
+        self.assertEqual(
+            snapshot["runtime_target_interactions"],
+            {"runtime-A": {"runtime-B": 1}},
+        )
+
+    def test_cross_batch_retry_after_accumulation_failure(self):
+        analyzer = CrossBatchAnalyzer()
+        analysis_result = {
+            "runtime_target_interactions": {
+                "runtime-A": {"runtime-B": 1},
+            }
+        }
+        original_counts = analyzer._interaction_counts
+
+        class FailingCounts(dict):
+            def setdefault(self, key, default=None):
+                raise RuntimeError("simulated accumulation failure")
+
+        analyzer._interaction_counts = FailingCounts()
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "simulated accumulation failure",
+        ):
+            analyzer.process_batch(
+                analysis_result,
+                batch_id="batch-accumulation-retry",
+            )
+
+        analyzer._interaction_counts = original_counts
+        analyzer.process_batch(
+            analysis_result,
+            batch_id="batch-accumulation-retry",
+        )
+        snapshot = analyzer.snapshot()
+        self.assertEqual(
+            snapshot["runtime_target_interactions"],
+            {"runtime-A": {"runtime-B": 1}},
+        )
+        self.assertEqual(snapshot["batches_processed"], 1)
+
     def test_pipeline_duplicate_batch_does_not_double_count(self):
         pipeline = AnalysisPipeline()
         batch = [
