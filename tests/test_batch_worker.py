@@ -392,6 +392,38 @@ class TestBatchWorker(unittest.TestCase):
 
         self.assertEqual(second_snapshot, first_snapshot)
 
+    def test_pipeline_rejects_batch_id_reuse_with_different_content(self):
+        pipeline = AnalysisPipeline()
+
+        first_batch = [
+            {
+                "event_id": "event-first",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+            }
+        ]
+        different_batch = [
+            {
+                "event_id": "event-different",
+                "source_runtime_id": "runtime-C",
+                "target_runtime_id": "runtime-D",
+            }
+        ]
+
+        pipeline.process(first_batch, batch_id="batch-reused")
+        first_snapshot = pipeline.snapshot()
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "batch_id.*different content",
+        ):
+            pipeline.process(
+                different_batch,
+                batch_id="batch-reused",
+            )
+
+        self.assertEqual(pipeline.snapshot(), first_snapshot)
+
     def test_pipeline_retry_after_accumulation_failure_is_idempotent(self):
         pipeline = AnalysisPipeline()
         batch = [

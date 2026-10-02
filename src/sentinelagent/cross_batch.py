@@ -1,3 +1,5 @@
+import hashlib
+import json
 from typing import Any
 
 
@@ -8,6 +10,17 @@ class CrossBatchAnalyzer:
         self._interaction_counts: dict[str, dict[str, int]] = {}
         self._batches_processed = 0
         self._processed_batch_ids: set[str] = set()
+        self._processed_batch_fingerprints: dict[str, str] = {}
+
+    def _fingerprint(self, analysis_result: dict[str, Any]) -> str:
+        """Create a stable fingerprint of a batch analysis result."""
+        serialized = json.dumps(
+            analysis_result,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
     def process_batch(
         self,
@@ -18,7 +31,15 @@ class CrossBatchAnalyzer:
         if batch_id is not None:
             if not isinstance(batch_id, str) or not batch_id.strip():
                 raise ValueError("batch_id must be a non-empty string")
+            fingerprint = self._fingerprint(analysis_result)
             if batch_id in self._processed_batch_ids:
+                previous_fingerprint = (
+                    self._processed_batch_fingerprints[batch_id]
+                )
+                if fingerprint != previous_fingerprint:
+                    raise ValueError(
+                        f"batch_id '{batch_id}' was reused with different content"
+                    )
                 return
 
         interactions = analysis_result.get("runtime_target_interactions", {})
@@ -68,6 +89,7 @@ class CrossBatchAnalyzer:
         self._batches_processed += 1
         if batch_id is not None:
             self._processed_batch_ids.add(batch_id)
+            self._processed_batch_fingerprints[batch_id] = fingerprint
 
     def snapshot(self) -> dict[str, Any]:
         """Return accumulated interaction evidence and risk assessments."""
