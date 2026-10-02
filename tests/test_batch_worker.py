@@ -562,6 +562,72 @@ class TestBatchWorker(unittest.TestCase):
             },
         )
 
+    def test_analysis_failure_does_not_block_independent_batch_or_retry(self):
+        pipeline = AnalysisPipeline()
+        original_analyze = pipeline.analysis_engine.analyze
+        should_fail = True
+
+        def fail_once(batch):
+            nonlocal should_fail
+            if (
+                batch[0].get("event_id") == "event-analysis-failed"
+                and should_fail
+            ):
+                should_fail = False
+                raise RuntimeError("simulated analysis failure")
+            return original_analyze(batch)
+
+        pipeline.analysis_engine.analyze = fail_once
+        failed_batch = [
+            {
+                "event_id": "event-analysis-failed",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+            }
+        ]
+        independent_batch = [
+            {
+                "event_id": "event-analysis-independent",
+                "source_runtime_id": "runtime-C",
+                "target_runtime_id": "runtime-D",
+            }
+        ]
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "simulated analysis failure",
+        ):
+            pipeline.process(
+                failed_batch,
+                batch_id="batch-analysis-failed",
+            )
+
+        self.assertEqual(pipeline.snapshot()["batches_processed"], 0)
+        pipeline.process(
+            independent_batch,
+            batch_id="batch-analysis-independent",
+        )
+        pipeline.process(
+            failed_batch,
+            batch_id="batch-analysis-failed",
+        )
+        first_snapshot = pipeline.snapshot()
+        pipeline.process(
+            failed_batch,
+            batch_id="batch-analysis-failed",
+        )
+        second_snapshot = pipeline.snapshot()
+
+        self.assertEqual(first_snapshot["batches_processed"], 2)
+        self.assertEqual(
+            first_snapshot["runtime_target_interactions"],
+            {
+                "runtime-A": {"runtime-B": 1},
+                "runtime-C": {"runtime-D": 1},
+            },
+        )
+        self.assertEqual(second_snapshot, first_snapshot)
+
 
 if __name__ == "__main__":
     unittest.main()
