@@ -2,6 +2,7 @@ import unittest
 
 from sentinelagent.analysis import AnalysisEngine
 from sentinelagent.batch_worker import BatchWorker
+from sentinelagent.cross_batch import CrossBatchAnalyzer
 
 
 class TestBatchWorker(unittest.TestCase):
@@ -108,6 +109,49 @@ class TestBatchWorker(unittest.TestCase):
         self.assertEqual(result, expected_batch)
         self.assertEqual(processed_batches, [expected_batch])
         self.assertEqual(stream.size(), 0)
+
+    def test_pipeline_accumulates_analysis_across_batches(self):
+        engine = AnalysisEngine()
+        cross_batch = CrossBatchAnalyzer()
+
+        def analysis_handler(batch, batch_id=None):
+            analysis_result = engine.analyze(batch)
+            cross_batch.process_batch(
+                analysis_result,
+                batch_id=batch_id,
+            )
+            return analysis_result
+
+        worker = BatchWorker(batch_handler=analysis_handler)
+        first_batch = [
+            {
+                "event_id": "event-1",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+            }
+        ]
+        second_batch = [
+            {
+                "event_id": "event-2",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+            }
+        ]
+
+        worker.process(first_batch, batch_id="batch-001")
+        worker.process(second_batch, batch_id="batch-002")
+        worker.process(second_batch, batch_id="batch-002")
+
+        result = cross_batch.snapshot()
+        self.assertEqual(result["batches_processed"], 2)
+        self.assertEqual(
+            result["runtime_target_interactions"],
+            {"runtime-A": {"runtime-B": 2}},
+        )
+        self.assertEqual(
+            result["repeated_runtime_interactions"],
+            {"runtime-A": {"runtime-B": 2}},
+        )
 
 
 if __name__ == "__main__":
