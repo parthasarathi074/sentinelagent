@@ -321,6 +321,60 @@ class TestBatchWorker(unittest.TestCase):
         self.assertEqual(failing_counts, {})
         self.assertEqual(analyzer.snapshot()["batches_processed"], 0)
 
+    def test_cross_batch_retry_after_partial_failure_is_idempotent(self):
+        analyzer = CrossBatchAnalyzer()
+        analysis_result = {
+            "runtime_target_interactions": {
+                "runtime-A": {"runtime-B": 1},
+                "runtime-C": {"runtime-D": 1},
+            }
+        }
+
+        class FailingCounts(dict):
+            def setdefault(self, key, default=None):
+                if key == "runtime-C":
+                    raise RuntimeError(
+                        "simulated partial accumulation failure"
+                    )
+                return super().setdefault(key, default)
+
+        failing_counts = FailingCounts()
+        analyzer._interaction_counts = failing_counts
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "simulated partial accumulation failure",
+        ):
+            analyzer.process_batch(
+                analysis_result,
+                batch_id="batch-partial-retry",
+            )
+
+        # The failed attempt must not modify the original state.
+        self.assertEqual(failing_counts, {})
+        self.assertEqual(analyzer.snapshot()["batches_processed"], 0)
+
+        # Restore a normal accumulator and retry using the same batch ID.
+        analyzer._interaction_counts = {}
+        analyzer.process_batch(
+            analysis_result,
+            batch_id="batch-partial-retry",
+        )
+        analyzer.process_batch(
+            analysis_result,
+            batch_id="batch-partial-retry",
+        )
+
+        snapshot = analyzer.snapshot()
+        self.assertEqual(snapshot["batches_processed"], 1)
+        self.assertEqual(
+            snapshot["runtime_target_interactions"],
+            {
+                "runtime-A": {"runtime-B": 1},
+                "runtime-C": {"runtime-D": 1},
+            },
+        )
+
     def test_pipeline_duplicate_batch_does_not_double_count(self):
         pipeline = AnalysisPipeline()
         batch = [
