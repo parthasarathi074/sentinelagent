@@ -392,6 +392,65 @@ class TestBatchWorker(unittest.TestCase):
 
         self.assertEqual(second_snapshot, first_snapshot)
 
+    def test_pipeline_retry_after_accumulation_failure_is_idempotent(self):
+        pipeline = AnalysisPipeline()
+        batch = [
+            {
+                "event_id": "event-retry-A",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+            },
+            {
+                "event_id": "event-retry-C",
+                "source_runtime_id": "runtime-C",
+                "target_runtime_id": "runtime-D",
+            },
+        ]
+        original_process_batch = (
+            pipeline.cross_batch_analyzer.process_batch
+        )
+        attempts = 0
+
+        def fail_once(analysis_result, batch_id=None):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("simulated accumulation failure")
+            return original_process_batch(
+                analysis_result,
+                batch_id=batch_id,
+            )
+
+        pipeline.cross_batch_analyzer.process_batch = fail_once
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "simulated accumulation failure",
+        ):
+            pipeline.process(batch, batch_id="batch-pipeline-retry")
+
+        # The failed accumulation must not record evidence.
+        self.assertEqual(
+            pipeline.snapshot()["batches_processed"],
+            0,
+        )
+
+        # Retry the same batch ID through the complete pipeline.
+        pipeline.process(batch, batch_id="batch-pipeline-retry")
+        first_snapshot = pipeline.snapshot()
+
+        # Replaying the successful batch must not change the snapshot.
+        pipeline.process(batch, batch_id="batch-pipeline-retry")
+        second_snapshot = pipeline.snapshot()
+        self.assertEqual(first_snapshot["batches_processed"], 1)
+        self.assertEqual(
+            first_snapshot["runtime_target_interactions"],
+            {
+                "runtime-A": {"runtime-B": 1},
+                "runtime-C": {"runtime-D": 1},
+            },
+        )
+        self.assertEqual(second_snapshot, first_snapshot)
+
 
 if __name__ == "__main__":
     unittest.main()
