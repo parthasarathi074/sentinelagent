@@ -508,6 +508,60 @@ class TestBatchWorker(unittest.TestCase):
             {"runtime-A": {"runtime-B": 1}},
         )
 
+    def test_failed_batch_does_not_block_other_batch_or_retry(self):
+        pipeline = AnalysisPipeline()
+        failed_batch = [
+            {
+                "event_id": "event-failed",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+            }
+        ]
+        independent_batch = [
+            {
+                "event_id": "event-independent",
+                "source_runtime_id": "runtime-C",
+                "target_runtime_id": "runtime-D",
+            }
+        ]
+        original_process_batch = (
+            pipeline.cross_batch_analyzer.process_batch
+        )
+        should_fail = True
+
+        def fail_once(analysis_result, batch_id=None):
+            nonlocal should_fail
+            if batch_id == "batch-failed" and should_fail:
+                should_fail = False
+                raise RuntimeError("simulated accumulation failure")
+            return original_process_batch(
+                analysis_result,
+                batch_id=batch_id,
+            )
+
+        pipeline.cross_batch_analyzer.process_batch = fail_once
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "simulated accumulation failure",
+        ):
+            pipeline.process(failed_batch, batch_id="batch-failed")
+
+        pipeline.process(
+            independent_batch,
+            batch_id="batch-independent",
+        )
+        pipeline.process(failed_batch, batch_id="batch-failed")
+
+        snapshot = pipeline.snapshot()
+        self.assertEqual(snapshot["batches_processed"], 2)
+        self.assertEqual(
+            snapshot["runtime_target_interactions"],
+            {
+                "runtime-A": {"runtime-B": 1},
+                "runtime-C": {"runtime-D": 1},
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
