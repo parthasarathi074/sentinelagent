@@ -22,6 +22,7 @@ class CrossBatchAnalyzer:
                 return
 
         interactions = analysis_result.get("runtime_target_interactions", {})
+        pending_updates: list[tuple[str, str, int]] = []
 
         if isinstance(interactions, dict):
             for source_runtime_id, targets in interactions.items():
@@ -48,13 +49,22 @@ class CrossBatchAnalyzer:
                     ):
                         continue
 
-                    source_counts = self._interaction_counts.setdefault(
-                        source_runtime_id, {}
-                    )
-                    source_counts[target_runtime_id] = (
-                        source_counts.get(target_runtime_id, 0) + count
+                    pending_updates.append(
+                        (source_runtime_id, target_runtime_id, count)
                     )
 
+        staged_counts = type(self._interaction_counts)()
+        staged_counts.update(
+            (source_runtime_id, dict(targets))
+            for source_runtime_id, targets in self._interaction_counts.items()
+        )
+        for source_runtime_id, target_runtime_id, count in pending_updates:
+            source_counts = staged_counts.setdefault(source_runtime_id, {})
+            source_counts[target_runtime_id] = (
+                source_counts.get(target_runtime_id, 0) + count
+            )
+
+        self._interaction_counts = staged_counts
         self._batches_processed += 1
         if batch_id is not None:
             self._processed_batch_ids.add(batch_id)

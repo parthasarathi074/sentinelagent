@@ -291,6 +291,36 @@ class TestBatchWorker(unittest.TestCase):
         )
         self.assertEqual(snapshot["batches_processed"], 1)
 
+    def test_cross_batch_failure_does_not_partially_accumulate(self):
+        analyzer = CrossBatchAnalyzer()
+        analysis_result = {
+            "runtime_target_interactions": {
+                "runtime-A": {"runtime-B": 1},
+                "runtime-C": {"runtime-D": 1},
+            }
+        }
+
+        class FailingCounts(dict):
+            def setdefault(self, key, default=None):
+                if key == "runtime-C":
+                    raise RuntimeError("simulated partial accumulation failure")
+                return super().setdefault(key, default)
+
+        failing_counts = FailingCounts()
+        analyzer._interaction_counts = failing_counts
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "simulated partial accumulation failure",
+        ):
+            analyzer.process_batch(
+                analysis_result,
+                batch_id="batch-partial-failure",
+            )
+
+        self.assertEqual(failing_counts, {})
+        self.assertEqual(analyzer.snapshot()["batches_processed"], 0)
+
     def test_pipeline_duplicate_batch_does_not_double_count(self):
         pipeline = AnalysisPipeline()
         batch = [
