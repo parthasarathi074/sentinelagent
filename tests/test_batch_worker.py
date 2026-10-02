@@ -193,6 +193,47 @@ class TestBatchWorker(unittest.TestCase):
             {"runtime-A": {"runtime-B": 2}},
         )
 
+    def test_pipeline_analysis_failure_does_not_update_snapshot(self):
+        pipeline = AnalysisPipeline()
+        initial_snapshot = pipeline.snapshot()
+
+        def failing_analysis(batch):
+            raise RuntimeError("simulated analysis failure")
+
+        pipeline.analysis_engine.analyze = failing_analysis
+        batch = [
+            {
+                "event_id": "event-failure",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+            }
+        ]
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "simulated analysis failure",
+        ):
+            pipeline.process(batch, batch_id="batch-failure")
+
+        self.assertEqual(pipeline.snapshot(), initial_snapshot)
+
+    def test_pipeline_duplicate_batch_does_not_double_count(self):
+        pipeline = AnalysisPipeline()
+        batch = [
+            {
+                "event_id": "event-duplicate",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+            }
+        ]
+
+        pipeline.process(batch, batch_id="batch-duplicate")
+        first_snapshot = pipeline.snapshot()
+        pipeline.process(batch, batch_id="batch-duplicate")
+        second_snapshot = pipeline.snapshot()
+
+        self.assertEqual(second_snapshot, first_snapshot)
+
 
 if __name__ == "__main__":
     unittest.main()
