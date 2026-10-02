@@ -451,6 +451,63 @@ class TestBatchWorker(unittest.TestCase):
         )
         self.assertEqual(second_snapshot, first_snapshot)
 
+    def test_pipeline_reanalyzes_batch_after_accumulation_failure(self):
+        pipeline = AnalysisPipeline()
+        batch = [
+            {
+                "event_id": "event-reanalysis",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+            }
+        ]
+        original_analyze = pipeline.analysis_engine.analyze
+        analysis_calls = 0
+
+        def track_analysis(events):
+            nonlocal analysis_calls
+            analysis_calls += 1
+            return original_analyze(events)
+
+        pipeline.analysis_engine.analyze = track_analysis
+        original_process_batch = (
+            pipeline.cross_batch_analyzer.process_batch
+        )
+        accumulation_calls = 0
+
+        def fail_once(analysis_result, batch_id=None):
+            nonlocal accumulation_calls
+            accumulation_calls += 1
+            if accumulation_calls == 1:
+                raise RuntimeError("simulated accumulation failure")
+            return original_process_batch(
+                analysis_result,
+                batch_id=batch_id,
+            )
+
+        pipeline.cross_batch_analyzer.process_batch = fail_once
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "simulated accumulation failure",
+        ):
+            pipeline.process(batch, batch_id="batch-reanalysis")
+
+        self.assertEqual(analysis_calls, 1)
+        self.assertEqual(
+            pipeline.snapshot()["batches_processed"],
+            0,
+        )
+
+        pipeline.process(batch, batch_id="batch-reanalysis")
+        self.assertEqual(analysis_calls, 2)
+        self.assertEqual(
+            pipeline.snapshot()["batches_processed"],
+            1,
+        )
+        self.assertEqual(
+            pipeline.snapshot()["runtime_target_interactions"],
+            {"runtime-A": {"runtime-B": 1}},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
