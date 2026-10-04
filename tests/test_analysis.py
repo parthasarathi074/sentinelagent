@@ -464,6 +464,123 @@ class TestAnalysisEngine(unittest.TestCase):
             },
         )
 
+    def test_analyze_exposes_interaction_graph_edges(self):
+        engine = AnalysisEngine()
+
+        result = engine.analyze([
+            {
+                "event_id": "event-1",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+            },
+            {
+                "event_id": "event-2",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+            },
+            {
+                "event_id": "event-3",
+                "source_runtime_id": "runtime-C",
+                "target_runtime_id": "runtime-B",
+            },
+        ])
+
+        graph = result["interaction_graph"]
+
+        self.assertEqual(
+            graph["nodes"],
+            ["runtime-A", "runtime-B", "runtime-C"],
+        )
+        self.assertEqual(
+            graph["edges"],
+            [
+                {
+                    "source_runtime_id": "runtime-A",
+                    "target_runtime_id": "runtime-B",
+                    "interaction_count": 2,
+                    "repeated": True,
+                },
+                {
+                    "source_runtime_id": "runtime-C",
+                    "target_runtime_id": "runtime-B",
+                    "interaction_count": 1,
+                    "repeated": False,
+                },
+            ],
+        )
+
+    def test_analyze_exposes_pairwise_coordination_evidence(self):
+        engine = AnalysisEngine()
+
+        result = engine.analyze([
+            {
+                "event_id": "event-1",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+            },
+            {
+                "event_id": "event-2",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+            },
+        ])
+
+        self.assertEqual(
+            result["interaction_graph"]["pairwise_coordination"],
+            [
+                {
+                    "source_runtime_id": "runtime-A",
+                    "target_runtime_id": "runtime-B",
+                    "interaction_count": 2,
+                    "signals": ["REPEATED_INTERACTION"],
+                }
+            ],
+        )
+
+    def test_analyze_exposes_group_coordination_evidence(self):
+        engine = AnalysisEngine()
+
+        result = engine.analyze([
+            {
+                "event_id": "event-1",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-T",
+            },
+            {
+                "event_id": "event-2",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-T",
+            },
+            {
+                "event_id": "event-3",
+                "source_runtime_id": "runtime-B",
+                "target_runtime_id": "runtime-T",
+            },
+            {
+                "event_id": "event-4",
+                "source_runtime_id": "runtime-B",
+                "target_runtime_id": "runtime-T",
+            },
+        ])
+
+        self.assertEqual(
+            result["interaction_graph"]["group_coordination"],
+            [
+                {
+                    "member_runtime_ids": [
+                        "runtime-A",
+                        "runtime-B",
+                    ],
+                    "shared_target_runtime_id": "runtime-T",
+                    "interaction_counts": {
+                        "runtime-A": 2,
+                        "runtime-B": 2,
+                    },
+                    "signals": ["SHARED_REPEATED_TARGET"],
+                }
+            ],
+        )
+
     def test_shared_target_requires_repeated_interactions_from_each_source(self):
         engine = AnalysisEngine()
 

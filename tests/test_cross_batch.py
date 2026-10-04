@@ -160,6 +160,42 @@ class TestCrossBatchAnalyzer(unittest.TestCase):
                         "runtime-B": 1,
                     },
                 },
+                "interaction_graph": {
+                    "nodes": [
+                        "runtime-A",
+                        "runtime-B",
+                        "runtime-C",
+                    ],
+                    "edges": [
+                        {
+                            "source_runtime_id": "runtime-A",
+                            "target_runtime_id": "runtime-B",
+                            "interaction_count": 2,
+                            "repeated": True,
+                        },
+                        {
+                            "source_runtime_id": "runtime-A",
+                            "target_runtime_id": "runtime-C",
+                            "interaction_count": 1,
+                            "repeated": False,
+                        },
+                        {
+                            "source_runtime_id": "runtime-B",
+                            "target_runtime_id": "runtime-C",
+                            "interaction_count": 1,
+                            "repeated": False,
+                        },
+                    ],
+                    "pairwise_coordination": [
+                        {
+                            "source_runtime_id": "runtime-A",
+                            "target_runtime_id": "runtime-B",
+                            "interaction_count": 2,
+                            "signals": ["REPEATED_INTERACTION"],
+                        }
+                    ],
+                    "group_coordination": [],
+                },
                 "runtime_risk_assessments": {
                     "runtime-A": {
                         "risk_score": 50,
@@ -195,6 +231,63 @@ class TestCrossBatchAnalyzer(unittest.TestCase):
             {"runtime-A": {"runtime-B": 2}},
         )
 
+    def test_graph_accumulates_coordination_evidence_across_batches(self):
+        analyzer = CrossBatchAnalyzer()
+
+        analyzer.process_batch({
+            "runtime_target_interactions": {
+                "runtime-A": {"runtime-T": 1},
+            },
+        })
+
+        analyzer.process_batch({
+            "runtime_target_interactions": {
+                "runtime-A": {"runtime-T": 1},
+                "runtime-B": {"runtime-T": 2},
+            },
+        })
+
+        graph = analyzer.snapshot()["interaction_graph"]
+
+        self.assertEqual(
+            graph["nodes"],
+            ["runtime-A", "runtime-B", "runtime-T"],
+        )
+        self.assertEqual(
+            graph["pairwise_coordination"],
+            [
+                {
+                    "source_runtime_id": "runtime-A",
+                    "target_runtime_id": "runtime-T",
+                    "interaction_count": 2,
+                    "signals": ["REPEATED_INTERACTION"],
+                },
+                {
+                    "source_runtime_id": "runtime-B",
+                    "target_runtime_id": "runtime-T",
+                    "interaction_count": 2,
+                    "signals": ["REPEATED_INTERACTION"],
+                },
+            ],
+        )
+        self.assertEqual(
+            graph["group_coordination"],
+            [
+                {
+                    "member_runtime_ids": [
+                        "runtime-A",
+                        "runtime-B",
+                    ],
+                    "shared_target_runtime_id": "runtime-T",
+                    "interaction_counts": {
+                        "runtime-A": 2,
+                        "runtime-B": 2,
+                    },
+                    "signals": ["SHARED_REPEATED_TARGET"],
+                }
+            ],
+        )
+
     def test_ignores_invalid_interaction_entries(self):
         analyzer = CrossBatchAnalyzer()
         analyzer.process_batch({
@@ -221,6 +314,26 @@ class TestCrossBatchAnalyzer(unittest.TestCase):
                     "runtime-A": {"runtime-D": 2},
                 },
                 "shared_target_interactions": {},
+                "interaction_graph": {
+                    "nodes": ["runtime-A", "runtime-D"],
+                    "edges": [
+                        {
+                            "source_runtime_id": "runtime-A",
+                            "target_runtime_id": "runtime-D",
+                            "interaction_count": 2,
+                            "repeated": True,
+                        }
+                    ],
+                    "pairwise_coordination": [
+                        {
+                            "source_runtime_id": "runtime-A",
+                            "target_runtime_id": "runtime-D",
+                            "interaction_count": 2,
+                            "signals": ["REPEATED_INTERACTION"],
+                        }
+                    ],
+                    "group_coordination": [],
+                },
                 "runtime_risk_assessments": {
                     "runtime-A": {
                         "risk_score": 20,

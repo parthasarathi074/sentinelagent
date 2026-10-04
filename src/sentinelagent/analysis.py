@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from typing import Any
 
+from sentinelagent.interaction_graph import InteractionGraph
+
 
 def _parse_timestamp(timestamp: str) -> datetime:
     """Parse an ISO 8601 timestamp and normalize it to UTC.
@@ -21,18 +23,19 @@ class AnalysisEngine:
     """
     Produces structured evidence from a completed batch of security events.
 
-    The first version performs basic batch analysis:
-    - counts events
-    - records event IDs
-    - counts events by source runtime
-    - counts interactions between source and target runtimes
-    - identifies repeated interactions between source and target runtimes
-    - identifies targets shared across source runtimes
-    - tracks runtime activity windows
-    - calculates runtime event rates
-
-    More advanced behavioral, temporal, graph, and collusion
-    analysis will be added later.
+    The analysis performs:
+    - event counting
+    - event ID collection
+    - event counts by source runtime
+    - interaction counts between source and target runtimes
+    - repeated interaction detection
+    - shared-target interaction detection
+    - interaction graph construction
+    - pairwise coordination evidence
+    - group coordination evidence
+    - runtime activity window tracking
+    - runtime event-rate calculation
+    - runtime risk assessment
     """
 
     def analyze(self, batch: list[Any]) -> dict[str, Any]:
@@ -40,15 +43,8 @@ class AnalysisEngine:
         Analyze one completed event batch.
 
         Returns:
-            A dictionary containing:
-            - the total event count
-            - event IDs
-            - event counts grouped by source runtime
-            - interaction counts grouped by source and target runtime
-            - repeated interactions grouped by source and target runtime
-            - shared targets grouped by target and source runtime
-            - first and last event timestamps for each runtime
-            - observed event rate for each runtime
+            A dictionary containing event, interaction, graph,
+            behavioral, temporal, and risk evidence.
         """
         events_by_source_runtime: dict[str, int] = {}
         runtime_target_interactions: dict[str, dict[str, int]] = {}
@@ -191,6 +187,8 @@ class AnalysisEngine:
             if len(source_interactions) > 1
         }
 
+        interaction_graph = InteractionGraph(runtime_target_interactions)
+
         runtime_risk_assessments: dict[str, dict[str, Any]] = {}
 
         all_runtime_ids = set(events_by_source_runtime)
@@ -239,7 +237,12 @@ class AnalysisEngine:
             "runtime_target_interactions": runtime_target_interactions,
             "repeated_runtime_interactions": repeated_runtime_interactions,
             "shared_target_interactions": shared_target_interactions,
+            "interaction_graph": interaction_graph.snapshot(),
             "runtime_activity_windows": runtime_activity_windows,
             "runtime_event_rates": runtime_event_rates,
             "runtime_risk_assessments": runtime_risk_assessments,
         }
+
+
+if __name__ == "__main__":
+    pass

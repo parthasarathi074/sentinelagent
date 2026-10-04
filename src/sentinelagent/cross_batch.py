@@ -1,6 +1,9 @@
 import hashlib
+import hashlib
 import json
 from typing import Any
+
+from sentinelagent.interaction_graph import InteractionGraph
 
 
 class CrossBatchAnalyzer:
@@ -153,10 +156,13 @@ class CrossBatchAnalyzer:
                 "reasons": reasons,
             }
 
+        interaction_graph = InteractionGraph(interaction_counts)
+
         return {
             "batches_processed": self._batches_processed,
             "runtime_target_interactions": interaction_counts,
             "repeated_runtime_interactions": repeated_interactions,
             "shared_target_interactions": shared_target_interactions,
+            "interaction_graph": interaction_graph.snapshot(),
             "runtime_risk_assessments": runtime_risk_assessments,
         }
