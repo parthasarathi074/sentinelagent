@@ -145,3 +145,27 @@ class TestPolicyEngine(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+    def test_policy_decision_to_dict_is_json_safe(self):
+        import json
+
+        result = self.engine.evaluate(
+            {
+                "runtime-a": {
+                    "risk_score": 60,
+                    "risk_level": "HIGH",
+                    "reasons": ["REPEATED_TARGET_INTERACTIONS"],
+                }
+            }
+        )
+
+        decision = result["runtime-a"]
+        payload = decision.to_dict()
+
+        encoded = json.dumps(payload)
+
+        self.assertIsInstance(encoded, str)
+        self.assertEqual(payload["runtime_agent_id"], "runtime-a")
+        self.assertEqual(payload["action"], "QUARANTINE")
+        self.assertIsInstance(payload["reasons"], list)

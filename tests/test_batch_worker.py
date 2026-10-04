@@ -663,3 +663,132 @@ class TestBatchWorker(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+    def test_pipeline_policy_decisions_are_json_safe(self):
+        import json
+
+        pipeline = AnalysisPipeline()
+
+        result = pipeline.process(
+            [
+                {
+                    "event_id": "json-safe-event",
+                    "source_runtime_id": "runtime-a",
+                    "target_runtime_id": "runtime-b",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                }
+            ],
+            batch_id="json-safe-batch",
+        )
+
+        encoded = json.dumps(result["policy_decisions_json"])
+        self.assertIsInstance(encoded, str)
+
+        decision = result["policy_decisions_json"]["runtime-a"]
+        self.assertIsInstance(decision["action"], str)
+        self.assertIsInstance(decision["reasons"], list)
+
+    def test_pipeline_snapshot_is_read_only_for_enforcement(self):
+        from sentinelagent.models import AgentStatus
+        from sentinelagent.registry import AgentRegistry
+
+        registry = AgentRegistry()
+        registry.register(
+            runtime_agent_id="runtime-a",
+            logical_agent_id="agent-a",
+            role="worker",
+            version="1",
+            permissions={"read"},
+            allowed_targets={"agent-b"},
+        )
+        registry.register(
+            runtime_agent_id="runtime-b",
+            logical_agent_id="agent-b",
+            role="worker",
+            version="1",
+            permissions={"read"},
+            allowed_targets=set(),
+        )
+
+        pipeline = AnalysisPipeline(registry=registry)
+
+        # Produce enough repeated/shared interaction evidence to make the
+        # runtime high risk.
+        first = [
+            {
+                "event_id": "snapshot-1",
+                "source_runtime_id": "runtime-a",
+                "target_runtime_id": "runtime-b",
+                "timestamp": "2026-01-01T00:00:00Z",
+            },
+            {
+                "event_id": "snapshot-2",
+                "source_runtime_id": "runtime-a",
+                "target_runtime_id": "runtime-b",
+                "timestamp": "2026-01-01T00:00:01Z",
+            },
+        ]
+
+        pipeline.process(first, batch_id="snapshot-batch-1")
+
+        # Reading a snapshot must not itself perform enforcement.
+        snapshot = pipeline.snapshot()
+
+        self.assertIn("policy_decisions", snapshot)
+        self.assertIn("policy_decisions_json", snapshot)
+        self.assertEqual(
+            registry.get("runtime-a").status,
+            AgentStatus.ACTIVE,
+        )
+        self.assertNotIn("enforced_actions", snapshot)
+
+    def test_pipeline_exposes_replacement_runtime_ids(self):
+        from sentinelagent.models import AgentStatus
+        from sentinelagent.registry import AgentRegistry
+
+        registry = AgentRegistry()
+        registry.register(
+            runtime_agent_id="runtime-a",
+            logical_agent_id="agent-a",
+            role="worker",
+            version="1",
+            permissions={"read"},
+            allowed_targets={"agent-b"},
+        )
+        registry.register(
+            runtime_agent_id="runtime-b",
+            logical_agent_id="agent-b",
+            role="worker",
+            version="1",
+            permissions={"read"},
+            allowed_targets=set(),
+        )
+
+        pipeline = AnalysisPipeline(registry=registry)
+
+        batch = [
+            {
+                "event_id": "replace-1",
+                "source_runtime_id": "runtime-a",
+                "target_runtime_id": "runtime-b",
+                "timestamp": "2026-01-01T00:00:00Z",
+            },
+            {
+                "event_id": "replace-2",
+                "source_runtime_id": "runtime-a",
+                "target_runtime_id": "runtime-b",
+                "timestamp": "2026-01-01T00:00:01Z",
+            },
+        ]
+
+        result = pipeline.process(batch, batch_id="replacement-batch")
+
+        # A single runtime with repeated interactions is MEDIUM, so this
+        # verifies the result shape without requiring quarantine.
+        self.assertIn("replacement_runtime_ids", result)
+        self.assertEqual(result["replacement_runtime_ids"], {})
+        self.assertEqual(
+            registry.get("runtime-a").status,
+            AgentStatus.SUSPICIOUS,
+        )

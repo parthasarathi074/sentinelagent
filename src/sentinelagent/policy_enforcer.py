@@ -1,6 +1,4 @@
-﻿from typing import Any
-
-from sentinelagent.models import AgentStatus
+﻿from sentinelagent.models import AgentStatus
 from sentinelagent.policy import PolicyAction, PolicyDecision
 from sentinelagent.registry import AgentRegistry
 from sentinelagent.replacement import RuntimeReplacementManager

@@ -41,11 +41,20 @@ class AnalysisPipeline:
         )
 
         analysis_result["policy_decisions"] = policy_decisions
+        analysis_result["policy_decisions_json"] = {
+            runtime_id: decision.to_dict()
+            for runtime_id, decision in policy_decisions.items()
+        }
 
         if self.policy_enforcer is not None:
             analysis_result["enforced_actions"] = (
                 self.policy_enforcer.enforce(policy_decisions)
             )
+            analysis_result["replacement_runtime_ids"] = dict(
+                self.policy_enforcer.replacement_runtime_ids
+            )
+        else:
+            analysis_result["replacement_runtime_ids"] = {}
 
         return analysis_result
 
@@ -61,17 +70,21 @@ class AnalysisPipeline:
         )
 
     def snapshot(self) -> dict[str, Any]:
-        """Return accumulated evidence and current policy decisions."""
+        """Return accumulated evidence and policy decisions without side effects.
+
+        Snapshotting is observational only. Enforcement belongs to batch
+        processing so that reading system state cannot unexpectedly quarantine
+        or replace a runtime.
+        """
         snapshot = self.cross_batch_analyzer.snapshot()
 
         policy_decisions = self.policy_engine.evaluate(
             snapshot.get("runtime_risk_assessments", {})
         )
         snapshot["policy_decisions"] = policy_decisions
-
-        if self.policy_enforcer is not None:
-            snapshot["enforced_actions"] = (
-                self.policy_enforcer.enforce(policy_decisions)
-            )
+        snapshot["policy_decisions_json"] = {
+            runtime_id: decision.to_dict()
+            for runtime_id, decision in policy_decisions.items()
+        }
 
         return snapshot

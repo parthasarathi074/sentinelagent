@@ -17,6 +17,16 @@ class PolicyDecision:
     action: PolicyAction
     reasons: tuple[str, ...]
 
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-safe representation of the decision."""
+        return {
+            "runtime_agent_id": self.runtime_agent_id,
+            "risk_score": self.risk_score,
+            "risk_level": self.risk_level,
+            "action": self.action.value,
+            "reasons": list(self.reasons),
+        }
+
 
 class PolicyEngine:
     """Map analyzed runtime risk evidence to security policy actions."""
