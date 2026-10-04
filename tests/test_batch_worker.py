@@ -124,6 +124,7 @@ class TestBatchWorker(unittest.TestCase):
             return analysis_result
 
         worker = BatchWorker(batch_handler=analysis_handler)
+
         first_batch = [
             {
                 "event_id": "event-1",
@@ -131,6 +132,7 @@ class TestBatchWorker(unittest.TestCase):
                 "target_runtime_id": "runtime-B",
             }
         ]
+
         second_batch = [
             {
                 "event_id": "event-2",
@@ -144,6 +146,7 @@ class TestBatchWorker(unittest.TestCase):
         worker.process(second_batch, batch_id="batch-002")
 
         result = cross_batch.snapshot()
+
         self.assertEqual(result["batches_processed"], 2)
         self.assertEqual(
             result["runtime_target_interactions"],
@@ -156,6 +159,7 @@ class TestBatchWorker(unittest.TestCase):
 
     def test_analysis_pipeline_integrates_all_components(self):
         pipeline = AnalysisPipeline()
+
         first_batch = [
             {
                 "event_id": "event-1",
@@ -163,6 +167,7 @@ class TestBatchWorker(unittest.TestCase):
                 "target_runtime_id": "runtime-B",
             }
         ]
+
         second_batch = [
             {
                 "event_id": "event-2",
@@ -175,10 +180,12 @@ class TestBatchWorker(unittest.TestCase):
             first_batch,
             batch_id="batch-001",
         )
+
         second_result = pipeline.process(
             second_batch,
             batch_id="batch-002",
         )
+
         pipeline.process(
             second_batch,
             batch_id="batch-002",
@@ -186,7 +193,9 @@ class TestBatchWorker(unittest.TestCase):
 
         self.assertEqual(first_result["event_count"], 1)
         self.assertEqual(second_result["event_count"], 1)
+
         snapshot = pipeline.snapshot()
+
         self.assertEqual(snapshot["batches_processed"], 2)
         self.assertEqual(
             snapshot["runtime_target_interactions"],
@@ -201,6 +210,7 @@ class TestBatchWorker(unittest.TestCase):
             raise RuntimeError("simulated analysis failure")
 
         pipeline.analysis_engine.analyze = failing_analysis
+
         batch = [
             {
                 "event_id": "event-failure",
@@ -225,11 +235,14 @@ class TestBatchWorker(unittest.TestCase):
         def fail_once(batch):
             nonlocal attempts
             attempts += 1
+
             if attempts == 1:
                 raise RuntimeError("temporary analysis failure")
+
             return original_analyze(batch)
 
         pipeline.analysis_engine.analyze = fail_once
+
         batch = [
             {
                 "event_id": "event-retry",
@@ -244,11 +257,16 @@ class TestBatchWorker(unittest.TestCase):
         ):
             pipeline.process(batch, batch_id="batch-retry")
 
-        result = pipeline.process(batch, batch_id="batch-retry")
+        result = pipeline.process(
+            batch,
+            batch_id="batch-retry",
+        )
 
         self.assertEqual(result["event_count"], 1)
         self.assertEqual(attempts, 2)
+
         snapshot = pipeline.snapshot()
+
         self.assertEqual(snapshot["batches_processed"], 1)
         self.assertEqual(
             snapshot["runtime_target_interactions"],
@@ -257,11 +275,13 @@ class TestBatchWorker(unittest.TestCase):
 
     def test_cross_batch_retry_after_accumulation_failure(self):
         analyzer = CrossBatchAnalyzer()
+
         analysis_result = {
             "runtime_target_interactions": {
                 "runtime-A": {"runtime-B": 1},
             }
         }
+
         original_counts = analyzer._interaction_counts
 
         class FailingCounts(dict):
@@ -280,11 +300,14 @@ class TestBatchWorker(unittest.TestCase):
             )
 
         analyzer._interaction_counts = original_counts
+
         analyzer.process_batch(
             analysis_result,
             batch_id="batch-accumulation-retry",
         )
+
         snapshot = analyzer.snapshot()
+
         self.assertEqual(
             snapshot["runtime_target_interactions"],
             {"runtime-A": {"runtime-B": 1}},
@@ -293,6 +316,7 @@ class TestBatchWorker(unittest.TestCase):
 
     def test_cross_batch_failure_does_not_partially_accumulate(self):
         analyzer = CrossBatchAnalyzer()
+
         analysis_result = {
             "runtime_target_interactions": {
                 "runtime-A": {"runtime-B": 1},
@@ -303,7 +327,10 @@ class TestBatchWorker(unittest.TestCase):
         class FailingCounts(dict):
             def setdefault(self, key, default=None):
                 if key == "runtime-C":
-                    raise RuntimeError("simulated partial accumulation failure")
+                    raise RuntimeError(
+                        "simulated partial accumulation failure"
+                    )
+
                 return super().setdefault(key, default)
 
         failing_counts = FailingCounts()
@@ -319,10 +346,14 @@ class TestBatchWorker(unittest.TestCase):
             )
 
         self.assertEqual(failing_counts, {})
-        self.assertEqual(analyzer.snapshot()["batches_processed"], 0)
+        self.assertEqual(
+            analyzer.snapshot()["batches_processed"],
+            0,
+        )
 
     def test_cross_batch_retry_after_partial_failure_is_idempotent(self):
         analyzer = CrossBatchAnalyzer()
+
         analysis_result = {
             "runtime_target_interactions": {
                 "runtime-A": {"runtime-B": 1},
@@ -336,6 +367,7 @@ class TestBatchWorker(unittest.TestCase):
                     raise RuntimeError(
                         "simulated partial accumulation failure"
                     )
+
                 return super().setdefault(key, default)
 
         failing_counts = FailingCounts()
@@ -350,22 +382,26 @@ class TestBatchWorker(unittest.TestCase):
                 batch_id="batch-partial-retry",
             )
 
-        # The failed attempt must not modify the original state.
         self.assertEqual(failing_counts, {})
-        self.assertEqual(analyzer.snapshot()["batches_processed"], 0)
+        self.assertEqual(
+            analyzer.snapshot()["batches_processed"],
+            0,
+        )
 
-        # Restore a normal accumulator and retry using the same batch ID.
         analyzer._interaction_counts = {}
+
         analyzer.process_batch(
             analysis_result,
             batch_id="batch-partial-retry",
         )
+
         analyzer.process_batch(
             analysis_result,
             batch_id="batch-partial-retry",
         )
 
         snapshot = analyzer.snapshot()
+
         self.assertEqual(snapshot["batches_processed"], 1)
         self.assertEqual(
             snapshot["runtime_target_interactions"],
@@ -377,6 +413,7 @@ class TestBatchWorker(unittest.TestCase):
 
     def test_pipeline_duplicate_batch_does_not_double_count(self):
         pipeline = AnalysisPipeline()
+
         batch = [
             {
                 "event_id": "event-duplicate",
@@ -385,9 +422,18 @@ class TestBatchWorker(unittest.TestCase):
             }
         ]
 
-        pipeline.process(batch, batch_id="batch-duplicate")
+        pipeline.process(
+            batch,
+            batch_id="batch-duplicate",
+        )
+
         first_snapshot = pipeline.snapshot()
-        pipeline.process(batch, batch_id="batch-duplicate")
+
+        pipeline.process(
+            batch,
+            batch_id="batch-duplicate",
+        )
+
         second_snapshot = pipeline.snapshot()
 
         self.assertEqual(second_snapshot, first_snapshot)
@@ -402,6 +448,7 @@ class TestBatchWorker(unittest.TestCase):
                 "target_runtime_id": "runtime-B",
             }
         ]
+
         different_batch = [
             {
                 "event_id": "event-different",
@@ -410,7 +457,11 @@ class TestBatchWorker(unittest.TestCase):
             }
         ]
 
-        pipeline.process(first_batch, batch_id="batch-reused")
+        pipeline.process(
+            first_batch,
+            batch_id="batch-reused",
+        )
+
         first_snapshot = pipeline.snapshot()
 
         with self.assertRaisesRegex(
@@ -422,10 +473,14 @@ class TestBatchWorker(unittest.TestCase):
                 batch_id="batch-reused",
             )
 
-        self.assertEqual(pipeline.snapshot(), first_snapshot)
+        self.assertEqual(
+            pipeline.snapshot(),
+            first_snapshot,
+        )
 
     def test_pipeline_retry_after_accumulation_failure_is_idempotent(self):
         pipeline = AnalysisPipeline()
+
         batch = [
             {
                 "event_id": "event-retry-A",
@@ -438,42 +493,62 @@ class TestBatchWorker(unittest.TestCase):
                 "target_runtime_id": "runtime-D",
             },
         ]
+
         original_process_batch = (
             pipeline.cross_batch_analyzer.process_batch
         )
+
         attempts = 0
 
         def fail_once(analysis_result, batch_id=None):
             nonlocal attempts
             attempts += 1
+
             if attempts == 1:
-                raise RuntimeError("simulated accumulation failure")
+                raise RuntimeError(
+                    "simulated accumulation failure"
+                )
+
             return original_process_batch(
                 analysis_result,
                 batch_id=batch_id,
             )
 
         pipeline.cross_batch_analyzer.process_batch = fail_once
+
         with self.assertRaisesRegex(
             RuntimeError,
             "simulated accumulation failure",
         ):
-            pipeline.process(batch, batch_id="batch-pipeline-retry")
+            pipeline.process(
+                batch,
+                batch_id="batch-pipeline-retry",
+            )
 
-        # The failed accumulation must not record evidence.
         self.assertEqual(
             pipeline.snapshot()["batches_processed"],
             0,
         )
 
-        # Retry the same batch ID through the complete pipeline.
-        pipeline.process(batch, batch_id="batch-pipeline-retry")
+        pipeline.process(
+            batch,
+            batch_id="batch-pipeline-retry",
+        )
+
         first_snapshot = pipeline.snapshot()
 
-        # Replaying the successful batch must not change the snapshot.
-        pipeline.process(batch, batch_id="batch-pipeline-retry")
+        pipeline.process(
+            batch,
+            batch_id="batch-pipeline-retry",
+        )
+
         second_snapshot = pipeline.snapshot()
-        self.assertEqual(first_snapshot["batches_processed"], 1)
+
+        self.assertEqual(
+            first_snapshot["batches_processed"],
+            1,
+        )
+
         self.assertEqual(
             first_snapshot["runtime_target_interactions"],
             {
@@ -481,10 +556,15 @@ class TestBatchWorker(unittest.TestCase):
                 "runtime-C": {"runtime-D": 1},
             },
         )
-        self.assertEqual(second_snapshot, first_snapshot)
+
+        self.assertEqual(
+            second_snapshot,
+            first_snapshot,
+        )
 
     def test_pipeline_reanalyzes_batch_after_accumulation_failure(self):
         pipeline = AnalysisPipeline()
+
         batch = [
             {
                 "event_id": "event-reanalysis",
@@ -492,6 +572,7 @@ class TestBatchWorker(unittest.TestCase):
                 "target_runtime_id": "runtime-B",
             }
         ]
+
         original_analyze = pipeline.analysis_engine.analyze
         analysis_calls = 0
 
@@ -501,27 +582,37 @@ class TestBatchWorker(unittest.TestCase):
             return original_analyze(events)
 
         pipeline.analysis_engine.analyze = track_analysis
+
         original_process_batch = (
             pipeline.cross_batch_analyzer.process_batch
         )
+
         accumulation_calls = 0
 
         def fail_once(analysis_result, batch_id=None):
             nonlocal accumulation_calls
             accumulation_calls += 1
+
             if accumulation_calls == 1:
-                raise RuntimeError("simulated accumulation failure")
+                raise RuntimeError(
+                    "simulated accumulation failure"
+                )
+
             return original_process_batch(
                 analysis_result,
                 batch_id=batch_id,
             )
 
         pipeline.cross_batch_analyzer.process_batch = fail_once
+
         with self.assertRaisesRegex(
             RuntimeError,
             "simulated accumulation failure",
         ):
-            pipeline.process(batch, batch_id="batch-reanalysis")
+            pipeline.process(
+                batch,
+                batch_id="batch-reanalysis",
+            )
 
         self.assertEqual(analysis_calls, 1)
         self.assertEqual(
@@ -529,7 +620,11 @@ class TestBatchWorker(unittest.TestCase):
             0,
         )
 
-        pipeline.process(batch, batch_id="batch-reanalysis")
+        pipeline.process(
+            batch,
+            batch_id="batch-reanalysis",
+        )
+
         self.assertEqual(analysis_calls, 2)
         self.assertEqual(
             pipeline.snapshot()["batches_processed"],
@@ -542,6 +637,7 @@ class TestBatchWorker(unittest.TestCase):
 
     def test_failed_batch_does_not_block_other_batch_or_retry(self):
         pipeline = AnalysisPipeline()
+
         failed_batch = [
             {
                 "event_id": "event-failed",
@@ -549,6 +645,7 @@ class TestBatchWorker(unittest.TestCase):
                 "target_runtime_id": "runtime-B",
             }
         ]
+
         independent_batch = [
             {
                 "event_id": "event-independent",
@@ -556,36 +653,55 @@ class TestBatchWorker(unittest.TestCase):
                 "target_runtime_id": "runtime-D",
             }
         ]
+
         original_process_batch = (
             pipeline.cross_batch_analyzer.process_batch
         )
+
         should_fail = True
 
         def fail_once(analysis_result, batch_id=None):
             nonlocal should_fail
+
             if batch_id == "batch-failed" and should_fail:
                 should_fail = False
-                raise RuntimeError("simulated accumulation failure")
+                raise RuntimeError(
+                    "simulated accumulation failure"
+                )
+
             return original_process_batch(
                 analysis_result,
                 batch_id=batch_id,
             )
 
         pipeline.cross_batch_analyzer.process_batch = fail_once
+
         with self.assertRaisesRegex(
             RuntimeError,
             "simulated accumulation failure",
         ):
-            pipeline.process(failed_batch, batch_id="batch-failed")
+            pipeline.process(
+                failed_batch,
+                batch_id="batch-failed",
+            )
 
         pipeline.process(
             independent_batch,
             batch_id="batch-independent",
         )
-        pipeline.process(failed_batch, batch_id="batch-failed")
+
+        pipeline.process(
+            failed_batch,
+            batch_id="batch-failed",
+        )
 
         snapshot = pipeline.snapshot()
-        self.assertEqual(snapshot["batches_processed"], 2)
+
+        self.assertEqual(
+            snapshot["batches_processed"],
+            2,
+        )
+
         self.assertEqual(
             snapshot["runtime_target_interactions"],
             {
@@ -594,22 +710,30 @@ class TestBatchWorker(unittest.TestCase):
             },
         )
 
-    def test_analysis_failure_does_not_block_independent_batch_or_retry(self):
+    def test_analysis_failure_does_not_block_independent_batch_or_retry(
+        self,
+    ):
         pipeline = AnalysisPipeline()
+
         original_analyze = pipeline.analysis_engine.analyze
         should_fail = True
 
         def fail_once(batch):
             nonlocal should_fail
+
             if (
                 batch[0].get("event_id") == "event-analysis-failed"
                 and should_fail
             ):
                 should_fail = False
-                raise RuntimeError("simulated analysis failure")
+                raise RuntimeError(
+                    "simulated analysis failure"
+                )
+
             return original_analyze(batch)
 
         pipeline.analysis_engine.analyze = fail_once
+
         failed_batch = [
             {
                 "event_id": "event-analysis-failed",
@@ -617,6 +741,7 @@ class TestBatchWorker(unittest.TestCase):
                 "target_runtime_id": "runtime-B",
             }
         ]
+
         independent_batch = [
             {
                 "event_id": "event-analysis-independent",
@@ -634,23 +759,35 @@ class TestBatchWorker(unittest.TestCase):
                 batch_id="batch-analysis-failed",
             )
 
-        self.assertEqual(pipeline.snapshot()["batches_processed"], 0)
+        self.assertEqual(
+            pipeline.snapshot()["batches_processed"],
+            0,
+        )
+
         pipeline.process(
             independent_batch,
             batch_id="batch-analysis-independent",
         )
+
         pipeline.process(
             failed_batch,
             batch_id="batch-analysis-failed",
         )
+
         first_snapshot = pipeline.snapshot()
+
         pipeline.process(
             failed_batch,
             batch_id="batch-analysis-failed",
         )
+
         second_snapshot = pipeline.snapshot()
 
-        self.assertEqual(first_snapshot["batches_processed"], 2)
+        self.assertEqual(
+            first_snapshot["batches_processed"],
+            2,
+        )
+
         self.assertEqual(
             first_snapshot["runtime_target_interactions"],
             {
@@ -658,12 +795,11 @@ class TestBatchWorker(unittest.TestCase):
                 "runtime-C": {"runtime-D": 1},
             },
         )
-        self.assertEqual(second_snapshot, first_snapshot)
 
-
-if __name__ == "__main__":
-    unittest.main()
-
+        self.assertEqual(
+            second_snapshot,
+            first_snapshot,
+        )
 
     def test_pipeline_policy_decisions_are_json_safe(self):
         import json
@@ -682,39 +818,58 @@ if __name__ == "__main__":
             batch_id="json-safe-batch",
         )
 
-        encoded = json.dumps(result["policy_decisions_json"])
+        encoded = json.dumps(
+            result["policy_decisions_json"]
+        )
+
         self.assertIsInstance(encoded, str)
 
         decision = result["policy_decisions_json"]["runtime-a"]
-        self.assertIsInstance(decision["action"], str)
-        self.assertIsInstance(decision["reasons"], list)
+
+        self.assertIsInstance(
+            decision["action"],
+            str,
+        )
+
+        self.assertIsInstance(
+            decision["reasons"],
+            list,
+        )
 
     def test_pipeline_snapshot_is_read_only_for_enforcement(self):
-        from sentinelagent.models import AgentStatus
+        from sentinelagent.models import AgentRecord, AgentStatus
         from sentinelagent.registry import AgentRegistry
 
         registry = AgentRegistry()
+
         registry.register(
-            runtime_agent_id="runtime-a",
-            logical_agent_id="agent-a",
-            role="worker",
-            version="1",
-            permissions={"read"},
-            allowed_targets={"agent-b"},
-        )
-        registry.register(
-            runtime_agent_id="runtime-b",
-            logical_agent_id="agent-b",
-            role="worker",
-            version="1",
-            permissions={"read"},
-            allowed_targets=set(),
+            AgentRecord(
+                runtime_agent_id="runtime-a",
+                logical_agent_id="agent-a",
+                role="worker",
+                version="1",
+                permissions={"read"},
+                allowed_targets={"agent-b"},
+                status=AgentStatus.ACTIVE,
+            )
         )
 
-        pipeline = AnalysisPipeline(registry=registry)
+        registry.register(
+            AgentRecord(
+                runtime_agent_id="runtime-b",
+                logical_agent_id="agent-b",
+                role="worker",
+                version="1",
+                permissions={"read"},
+                allowed_targets=set(),
+                status=AgentStatus.ACTIVE,
+            )
+        )
 
-        # Produce enough repeated/shared interaction evidence to make the
-        # runtime high risk.
+        pipeline = AnalysisPipeline(
+            registry=registry,
+        )
+
         first = [
             {
                 "event_id": "snapshot-1",
@@ -730,42 +885,74 @@ if __name__ == "__main__":
             },
         ]
 
-        pipeline.process(first, batch_id="snapshot-batch-1")
+        pipeline.process(
+            first,
+            batch_id="snapshot-batch-1",
+        )
 
-        # Reading a snapshot must not itself perform enforcement.
+        status_before_snapshot = registry.get(
+            "runtime-a"
+        ).status
+
         snapshot = pipeline.snapshot()
 
-        self.assertIn("policy_decisions", snapshot)
-        self.assertIn("policy_decisions_json", snapshot)
-        self.assertEqual(
-            registry.get("runtime-a").status,
-            AgentStatus.ACTIVE,
+        status_after_snapshot = registry.get(
+            "runtime-a"
+        ).status
+
+        self.assertIn(
+            "policy_decisions",
+            snapshot,
         )
-        self.assertNotIn("enforced_actions", snapshot)
+
+        self.assertIn(
+            "policy_decisions_json",
+            snapshot,
+        )
+
+        self.assertEqual(
+            status_after_snapshot,
+            status_before_snapshot,
+        )
+
+        self.assertNotIn(
+            "enforced_actions",
+            snapshot,
+        )
 
     def test_pipeline_exposes_replacement_runtime_ids(self):
-        from sentinelagent.models import AgentStatus
+        from sentinelagent.models import AgentRecord, AgentStatus
         from sentinelagent.registry import AgentRegistry
 
         registry = AgentRegistry()
+
         registry.register(
-            runtime_agent_id="runtime-a",
-            logical_agent_id="agent-a",
-            role="worker",
-            version="1",
-            permissions={"read"},
-            allowed_targets={"agent-b"},
-        )
-        registry.register(
-            runtime_agent_id="runtime-b",
-            logical_agent_id="agent-b",
-            role="worker",
-            version="1",
-            permissions={"read"},
-            allowed_targets=set(),
+            AgentRecord(
+                runtime_agent_id="runtime-a",
+                logical_agent_id="agent-a",
+                role="worker",
+                version="1",
+                permissions={"read"},
+                allowed_targets={"agent-b"},
+                status=AgentStatus.ACTIVE,
+            )
         )
 
-        pipeline = AnalysisPipeline(registry=registry)
+        registry.register(
+            AgentRecord(
+                runtime_agent_id="runtime-b",
+                logical_agent_id="agent-b",
+                role="worker",
+                version="1",
+                permissions={"read"},
+                allowed_targets=set(),
+                status=AgentStatus.ACTIVE,
+            )
+        )
+
+        pipeline = AnalysisPipeline(
+            registry=registry,
+        )
 
         batch = [
             {
@@ -782,13 +969,26 @@ if __name__ == "__main__":
             },
         ]
 
-        result = pipeline.process(batch, batch_id="replacement-batch")
+        result = pipeline.process(
+            batch,
+            batch_id="replacement-batch",
+        )
 
-        # A single runtime with repeated interactions is MEDIUM, so this
-        # verifies the result shape without requiring quarantine.
-        self.assertIn("replacement_runtime_ids", result)
-        self.assertEqual(result["replacement_runtime_ids"], {})
+        self.assertIn(
+            "replacement_runtime_ids",
+            result,
+        )
+
+        self.assertEqual(
+            result["replacement_runtime_ids"],
+            {},
+        )
+
         self.assertEqual(
             registry.get("runtime-a").status,
             AgentStatus.SUSPICIOUS,
         )
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -142,11 +142,6 @@ class TestPolicyEngine(unittest.TestCase):
             PolicyAction.QUARANTINE,
         )
 
-
-if __name__ == "__main__":
-    unittest.main()
-
-
     def test_policy_decision_to_dict_is_json_safe(self):
         import json
 
@@ -169,3 +164,6 @@ if __name__ == "__main__":
         self.assertEqual(payload["runtime_agent_id"], "runtime-a")
         self.assertEqual(payload["action"], "QUARANTINE")
         self.assertIsInstance(payload["reasons"], list)
+
+if __name__ == "__main__":
+    unittest.main()
