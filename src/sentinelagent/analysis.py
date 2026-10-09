@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sentinelagent.interaction_graph import InteractionGraph
+from sentinelagent.collusion import CollusionAssessor
 
 
 def _parse_timestamp(timestamp: str) -> datetime:
@@ -238,6 +239,7 @@ class AnalysisEngine:
             "repeated_runtime_interactions": repeated_runtime_interactions,
             "shared_target_interactions": shared_target_interactions,
             "interaction_graph": interaction_graph.snapshot(),
+            "collusion_assessment": CollusionAssessor().assess(runtime_target_interactions),
             "runtime_activity_windows": runtime_activity_windows,
             "runtime_event_rates": runtime_event_rates,
             "runtime_risk_assessments": runtime_risk_assessments,

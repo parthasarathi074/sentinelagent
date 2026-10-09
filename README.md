@@ -18,6 +18,17 @@ Phase 0 / Step 1 — Repository initialization
 - Interaction-graph analysis
 - Policy and permission checks
 - Collusion risk assessment
+
+### Collusion assessment (FR-11)
+
+The observational collusion assessor classifies interaction evidence as `NORMAL`,
+`SUSPICIOUS`, `HIGH_RISK`, or `COLLUSION` and returns the supporting evidence and
+reason codes. Repeated traffic alone is classified as suspicious, not proof of
+collusion. Repeated shared-target groups raise the assessment to high risk; the
+`COLLUSION` label requires both a repeated shared-target group and reciprocal
+repeated interactions among group members. Results are exposed in per-batch
+analysis and the accumulated `AnalysisPipeline.snapshot()`. These labels do not
+independently trigger policy enforcement or quarantine.
 - Rogue-agent quarantine
 - Clean-agent replacement
 - Pipeline recovery

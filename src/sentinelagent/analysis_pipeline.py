@@ -3,6 +3,7 @@ from typing import Any
 from sentinelagent.analysis import AnalysisEngine
 from sentinelagent.batch_worker import BatchWorker
 from sentinelagent.cross_batch import CrossBatchAnalyzer
+from sentinelagent.collusion import CollusionAssessor
 from sentinelagent.policy import PolicyDecision, PolicyEngine
 from sentinelagent.policy_enforcer import PolicyEnforcer
 from sentinelagent.recovery import PipelineRecoveryManager
@@ -42,6 +43,8 @@ class AnalysisPipeline:
             batch_id=batch_id,
         )
 
+        # Collusion assessment is observational only; existing policy decisions
+        # continue to be based on the established risk engine.
         policy_decisions = self.policy_engine.evaluate_analysis(
             analysis_result
         )
@@ -101,6 +104,9 @@ class AnalysisPipeline:
         quarantine, replace, or recover a runtime.
         """
         snapshot = self.cross_batch_analyzer.snapshot()
+        snapshot["collusion_assessment"] = CollusionAssessor().assess(
+            snapshot.get("runtime_target_interactions", {})
+        )
 
         policy_decisions = self.policy_engine.evaluate(
             snapshot.get("runtime_risk_assessments", {})
