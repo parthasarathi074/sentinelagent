@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Dict
 
 from .models import AgentRecord, AgentStatus, utc_now
@@ -10,6 +11,9 @@ class AgentRegistry:
     In-memory authoritative registry for agent identity,
     permissions, status, and replacement relationships.
 
+    Records are copied at the registry boundary so callers cannot
+    mutate authoritative state through returned AgentRecord objects.
+
     Persistence will be added later.
     """
 
@@ -17,33 +21,42 @@ class AgentRegistry:
         self._agents: Dict[str, AgentRecord] = {}
 
     def register(self, agent: AgentRecord) -> AgentRecord:
-        if agent.runtime_agent_id in self._agents:
+        # Store a detached copy so later changes to the caller's object
+        # cannot silently change the authoritative registry.
+        stored_agent = deepcopy(agent)
+
+        if stored_agent.runtime_agent_id in self._agents:
             raise ValueError(
-                f"Runtime agent already registered: {agent.runtime_agent_id}"
+                f"Runtime agent already registered: "
+                f"{stored_agent.runtime_agent_id}"
             )
 
-        # Only one ACTIVE runtime should normally exist for a logical role.
-        active_runtime = self.get_active_runtime(agent.logical_agent_id)
+        active_runtime = self.get_active_runtime(
+            stored_agent.logical_agent_id
+        )
 
-        if active_runtime is not None and agent.status == AgentStatus.ACTIVE:
+        if (
+            active_runtime is not None
+            and stored_agent.status == AgentStatus.ACTIVE
+        ):
             raise ValueError(
                 f"Logical agent already has an ACTIVE runtime: "
                 f"{active_runtime.runtime_agent_id}"
             )
 
-        self._agents[agent.runtime_agent_id] = agent
-        return agent
+        self._agents[stored_agent.runtime_agent_id] = stored_agent
+        return deepcopy(stored_agent)
 
     def get(self, runtime_agent_id: str) -> AgentRecord:
         try:
-            return self._agents[runtime_agent_id]
+            return deepcopy(self._agents[runtime_agent_id])
         except KeyError as exc:
             raise KeyError(
                 f"Unknown runtime agent: {runtime_agent_id}"
             ) from exc
 
     def all_agents(self) -> list[AgentRecord]:
-        return list(self._agents.values())
+        return deepcopy(list(self._agents.values()))
 
     def get_active_runtime(
         self,
@@ -54,12 +67,12 @@ class AgentRegistry:
                 agent.logical_agent_id == logical_agent_id
                 and agent.status == AgentStatus.ACTIVE
             ):
-                return agent
+                return deepcopy(agent)
 
         return None
 
     def activate(self, runtime_agent_id: str) -> AgentRecord:
-        agent = self.get(runtime_agent_id)
+        agent = self._get_internal(runtime_agent_id)
 
         active_runtime = self.get_active_runtime(agent.logical_agent_id)
 
@@ -82,10 +95,10 @@ class AgentRegistry:
         if agent.activated_at is None:
             agent.activated_at = utc_now()
 
-        return agent
+        return deepcopy(agent)
 
     def mark_suspicious(self, runtime_agent_id: str) -> AgentRecord:
-        agent = self.get(runtime_agent_id)
+        agent = self._get_internal(runtime_agent_id)
 
         if agent.status == AgentStatus.QUARANTINED:
             raise ValueError(
@@ -93,18 +106,18 @@ class AgentRegistry:
             )
 
         agent.status = AgentStatus.SUSPICIOUS
-        return agent
+        return deepcopy(agent)
 
-    def quarantine(
-        self,
-        runtime_agent_id: str,
-    ) -> AgentRecord:
-        agent = self.get(runtime_agent_id)
+    def quarantine(self, runtime_agent_id: str) -> AgentRecord:
+        agent = self._get_internal(runtime_agent_id)
 
         agent.status = AgentStatus.QUARANTINED
-        agent.quarantined_at = utc_now()
 
-        return agent
+        # Preserve the original timestamp on repeated quarantine calls.
+        if agent.quarantined_at is None:
+            agent.quarantined_at = utc_now()
+
+        return deepcopy(agent)
 
     def create_replacement(
         self,
@@ -112,7 +125,7 @@ class AgentRegistry:
         new_runtime_id: str,
         new_credentials_reference: str,
     ) -> AgentRecord:
-        old_agent = self.get(quarantined_runtime_id)
+        old_agent = self._get_internal(quarantined_runtime_id)
 
         if old_agent.status != AgentStatus.QUARANTINED:
             raise ValueError(
@@ -138,12 +151,12 @@ class AgentRegistry:
 
         self.register(replacement)
 
-        # Preserve the old rogue runtime in QUARANTINED state.
+        # Preserve the old runtime in QUARANTINED state.
         old_agent.replaced_by = new_runtime_id
 
         self.activate(new_runtime_id)
 
-        return replacement
+        return self.get(new_runtime_id)
 
     def is_authorized(
         self,
@@ -151,8 +164,9 @@ class AgentRegistry:
         target_runtime_id: str,
         requested_permission: str,
     ) -> tuple[bool, str]:
-        source = self.get(source_runtime_id)
-        target = self.get(target_runtime_id)
+        # Use internal records for a consistent authorization check.
+        source = self._get_internal(source_runtime_id)
+        target = self._get_internal(target_runtime_id)
 
         if source.status != AgentStatus.ACTIVE:
             return (
@@ -179,3 +193,12 @@ class AgentRegistry:
             )
 
         return True, "authorized"
+
+    def _get_internal(self, runtime_agent_id: str) -> AgentRecord:
+        """Return an internal record for use only within this registry."""
+        try:
+            return self._agents[runtime_agent_id]
+        except KeyError as exc:
+            raise KeyError(
+                f"Unknown runtime agent: {runtime_agent_id}"
+            ) from exc

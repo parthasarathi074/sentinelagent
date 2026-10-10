@@ -9,7 +9,9 @@ class MicroBatchProcessor:
 
     A batch is processed when either:
     - the configured batch size is reached, or
-    - the oldest waiting event has waited for max_wait_seconds.
+    - a partial batch has remained in the stream for at least
+      max_wait_seconds, measured from the first time process_once()
+      observes a non-empty stream.
 
     The clock can be injected for deterministic testing.
     """
@@ -40,12 +42,8 @@ class MicroBatchProcessor:
         """
         Process one batch when either batching condition is satisfied.
 
-        A batch is processed when:
-        - enough events are available, OR
-        - the current partial batch has waited long enough.
-
-        Returns the processed batch.
-        Returns an empty list when processing conditions are not met.
+        The timeout begins when this method first observes a non-empty
+        stream. Returns an empty list when no processing condition is met.
         """
         current_size = self.event_stream.size()
 

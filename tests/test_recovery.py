@@ -6,6 +6,18 @@ from sentinelagent.recovery import PipelineRecoveryManager, RecoveryState
 from sentinelagent.registry import AgentRegistry
 
 
+def set_stored_agent_field(
+    registry: AgentRegistry,
+    runtime_agent_id: str,
+    field_name: str,
+    value: object,
+) -> None:
+    """Alter internal registry state for negative tests only."""
+    agents = object.__getattribute__(registry, "_agents")
+    agent = agents[runtime_agent_id]
+    setattr(agent, field_name, value)
+
+
 def make_registry() -> tuple[AgentRegistry, AgentRecord, AgentRecord]:
     registry = AgentRegistry()
 
@@ -86,10 +98,14 @@ def test_recovery_rejects_different_replacement_for_existing_recovery() -> None:
 
 def test_recovery_fails_if_old_runtime_is_not_quarantined() -> None:
     registry, old, replacement = make_registry()
-    old.status = AgentStatus.ACTIVE
+    set_stored_agent_field(
+        registry,
+        old.runtime_agent_id,
+        "status",
+        AgentStatus.ACTIVE,
+    )
 
     manager = PipelineRecoveryManager(registry)
-
     result = manager.recover(
         old.runtime_agent_id,
         replacement.runtime_agent_id,
@@ -101,10 +117,14 @@ def test_recovery_fails_if_old_runtime_is_not_quarantined() -> None:
 
 def test_recovery_fails_if_replacement_is_not_active() -> None:
     registry, old, replacement = make_registry()
-    replacement.status = AgentStatus.REGISTERED
+    set_stored_agent_field(
+        registry,
+        replacement.runtime_agent_id,
+        "status",
+        AgentStatus.REGISTERED,
+    )
 
     manager = PipelineRecoveryManager(registry)
-
     result = manager.recover(
         old.runtime_agent_id,
         replacement.runtime_agent_id,
@@ -116,10 +136,14 @@ def test_recovery_fails_if_replacement_is_not_active() -> None:
 
 def test_recovery_fails_for_wrong_logical_agent() -> None:
     registry, old, replacement = make_registry()
-    replacement.logical_agent_id = "different-agent"
+    set_stored_agent_field(
+        registry,
+        replacement.runtime_agent_id,
+        "logical_agent_id",
+        "different-agent",
+    )
 
     manager = PipelineRecoveryManager(registry)
-
     result = manager.recover(
         old.runtime_agent_id,
         replacement.runtime_agent_id,
@@ -131,10 +155,14 @@ def test_recovery_fails_for_wrong_logical_agent() -> None:
 
 def test_recovery_fails_when_relationship_is_inconsistent() -> None:
     registry, old, replacement = make_registry()
-    old.replaced_by = None
+    set_stored_agent_field(
+        registry,
+        old.runtime_agent_id,
+        "replaced_by",
+        None,
+    )
 
     manager = PipelineRecoveryManager(registry)
-
     result = manager.recover(
         old.runtime_agent_id,
         replacement.runtime_agent_id,
@@ -159,10 +187,14 @@ def test_recovery_requires_exactly_one_active_runtime() -> None:
     )
 
     registry.register(extra)
-    extra.status = AgentStatus.ACTIVE
+    set_stored_agent_field(
+        registry,
+        extra.runtime_agent_id,
+        "status",
+        AgentStatus.ACTIVE,
+    )
 
     manager = PipelineRecoveryManager(registry)
-
     result = manager.recover(
         old.runtime_agent_id,
         replacement.runtime_agent_id,
@@ -174,10 +206,14 @@ def test_recovery_requires_exactly_one_active_runtime() -> None:
 
 def test_recovery_requires_fresh_credentials() -> None:
     registry, old, replacement = make_registry()
-    replacement.credentials_reference = old.credentials_reference
+    set_stored_agent_field(
+        registry,
+        replacement.runtime_agent_id,
+        "credentials_reference",
+        old.credentials_reference,
+    )
 
     manager = PipelineRecoveryManager(registry)
-
     result = manager.recover(
         old.runtime_agent_id,
         replacement.runtime_agent_id,
@@ -199,8 +235,9 @@ def test_recovery_snapshot_is_json_safe() -> None:
     snapshot = manager.snapshot_json()
 
     assert snapshot[old.runtime_agent_id]["state"] == "RECOVERED"
-    assert snapshot[old.runtime_agent_id]["replacement_runtime_id"] == (
-        replacement.runtime_agent_id
+    assert (
+        snapshot[old.runtime_agent_id]["replacement_runtime_id"]
+        == replacement.runtime_agent_id
     )
 
 
@@ -219,7 +256,6 @@ def make_pipeline_registry() -> tuple[AgentRegistry, AgentRecord]:
     )
 
     registry.register(agent)
-
     return registry, agent
 
 
@@ -255,13 +291,11 @@ def test_pipeline_process_runs_recovery_after_replacement(
     replacement_id = result["replacement_runtime_ids"][
         agent.runtime_agent_id
     ]
-
     recovery = result["recovery_results"][agent.runtime_agent_id]
 
     assert result["enforced_actions"][agent.runtime_agent_id] == (
         PolicyAction.QUARANTINE.value
     )
-
     assert recovery["state"] == "RECOVERED"
     assert recovery["replacement_runtime_id"] == replacement_id
 
@@ -312,6 +346,7 @@ def test_pipeline_snapshot_exposes_recovery_results() -> None:
 
     snapshot = pipeline.snapshot()
 
-    assert snapshot["recovery_results"][
-        agent.runtime_agent_id
-    ]["state"] == "RECOVERED"
+    assert (
+        snapshot["recovery_results"][agent.runtime_agent_id]["state"]
+        == "RECOVERED"
+    )

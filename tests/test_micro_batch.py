@@ -41,7 +41,6 @@ class TestMicroBatchProcessor(unittest.TestCase):
                 {"event_id": "event-3"},
             ],
         )
-
         self.assertEqual(len(processed_batches), 1)
 
     def test_waits_when_batch_is_not_full(self):
@@ -113,7 +112,6 @@ class TestMicroBatchProcessor(unittest.TestCase):
         self.assertEqual(processed_batches, [])
 
         clock.advance(9)
-
         result = processor.process_once()
 
         self.assertEqual(result, [])
@@ -136,7 +134,6 @@ class TestMicroBatchProcessor(unittest.TestCase):
         stream.publish({"event_id": "event-2"})
 
         processor.process_once()
-
         clock.advance(10)
 
         result = processor.process_once()
@@ -148,7 +145,6 @@ class TestMicroBatchProcessor(unittest.TestCase):
                 {"event_id": "event-2"},
             ],
         )
-
         self.assertEqual(len(processed_batches), 1)
 
     def test_invalid_max_wait_is_rejected(self):
@@ -188,21 +184,16 @@ class TestMicroBatchProcessor(unittest.TestCase):
                 {"event_id": "event-3"},
             ],
         )
-
         self.assertEqual(stream.size(), 2)
 
         result = processor.process_once()
-
         self.assertEqual(result, [])
 
         clock.advance(9)
-
         result = processor.process_once()
-
         self.assertEqual(result, [])
 
         clock.advance(1)
-
         result = processor.process_once()
 
         self.assertEqual(
@@ -212,7 +203,6 @@ class TestMicroBatchProcessor(unittest.TestCase):
                 {"event_id": "event-5"},
             ],
         )
-
         self.assertEqual(stream.size(), 0)
 
     def test_failed_handler_restores_batch_for_retry(self):
@@ -252,6 +242,35 @@ class TestMicroBatchProcessor(unittest.TestCase):
         )
         self.assertEqual(len(attempts), 2)
         self.assertEqual(stream.size(), 0)
+
+    def test_timeout_starts_when_processor_first_observes_events(self):
+        stream = EventStream()
+        processed_batches = []
+        clock = FakeClock()
+
+        processor = MicroBatchProcessor(
+            event_stream=stream,
+            batch_size=3,
+            max_wait_seconds=10,
+            batch_handler=processed_batches.append,
+            clock=clock,
+        )
+
+        stream.publish({"event_id": "event-1"})
+
+        # The processor has not checked the stream yet.
+        clock.advance(20)
+
+        result = processor.process_once()
+
+        # The timer starts when the processor first observes the events.
+        self.assertEqual(result, [])
+
+        clock.advance(10)
+        result = processor.process_once()
+
+        self.assertEqual(result, [{"event_id": "event-1"}])
+        self.assertEqual(len(processed_batches), 1)
 
 
 if __name__ == "__main__":
