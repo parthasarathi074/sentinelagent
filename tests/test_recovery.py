@@ -80,6 +80,59 @@ def test_recovery_is_idempotent_after_success() -> None:
     assert second.attempt == 1
 
 
+def test_recovery_retries_after_repeated_failures() -> None:
+    registry, old, replacement = make_registry()
+    manager = PipelineRecoveryManager(registry)
+
+    # First attempt fails because the replacement is not ACTIVE.
+    set_stored_agent_field(
+        registry,
+        replacement.runtime_agent_id,
+        "status",
+        AgentStatus.REGISTERED,
+    )
+
+    first = manager.recover(
+        old.runtime_agent_id,
+        replacement.runtime_agent_id,
+    )
+
+    assert first.state == RecoveryState.FAILED
+    assert first.attempt == 1
+    assert first.completed_at is not None
+    assert "ACTIVE" in (first.reason or "")
+
+    # Second attempt fails for the same reason and increments the count.
+    second = manager.recover(
+        old.runtime_agent_id,
+        replacement.runtime_agent_id,
+    )
+
+    assert second is first
+    assert second.state == RecoveryState.FAILED
+    assert second.attempt == 2
+    assert second.completed_at is not None
+
+    # Restore the replacement and confirm a third attempt succeeds.
+    set_stored_agent_field(
+        registry,
+        replacement.runtime_agent_id,
+        "status",
+        AgentStatus.ACTIVE,
+    )
+
+    third = manager.recover(
+        old.runtime_agent_id,
+        replacement.runtime_agent_id,
+    )
+
+    assert third is first
+    assert third.state == RecoveryState.RECOVERED
+    assert third.attempt == 3
+    assert third.completed_at is not None
+    assert third.reason is None
+
+
 def test_recovery_rejects_different_replacement_for_existing_recovery() -> None:
     registry, old, replacement = make_registry()
     manager = PipelineRecoveryManager(registry)
