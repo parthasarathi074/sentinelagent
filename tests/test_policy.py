@@ -142,6 +142,38 @@ class TestPolicyEngine(unittest.TestCase):
             PolicyAction.QUARANTINE,
         )
 
+    def test_collusion_label_alone_does_not_change_policy_action(self) -> None:
+        risk_assessment = {
+            "runtime-A": {
+                "risk_score": 0,
+                "risk_level": "LOW",
+                "reasons": [],
+            }
+        }
+
+        normal_result = self.engine.evaluate_analysis(
+            {
+                "runtime_risk_assessments": risk_assessment,
+                "collusion_assessment": {"state": "NORMAL"},
+            }
+        )
+
+        collusion_result = self.engine.evaluate_analysis(
+            {
+                "runtime_risk_assessments": risk_assessment,
+                "collusion_assessment": {"state": "COLLUSION"},
+            }
+        )
+
+        self.assertEqual(
+            normal_result["runtime-A"].action,
+            PolicyAction.MONITOR,
+        )
+        self.assertEqual(
+            collusion_result["runtime-A"].action,
+            PolicyAction.MONITOR,
+        )
+
     def test_policy_decision_to_dict_is_json_safe(self):
         import json
 
@@ -164,6 +196,7 @@ class TestPolicyEngine(unittest.TestCase):
         self.assertEqual(payload["runtime_agent_id"], "runtime-a")
         self.assertEqual(payload["action"], "QUARANTINE")
         self.assertIsInstance(payload["reasons"], list)
+
 
 if __name__ == "__main__":
     unittest.main()
