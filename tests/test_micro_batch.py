@@ -91,9 +91,9 @@ class TestMicroBatchProcessor(unittest.TestCase):
             )
 
     def test_partial_batch_waits_until_max_wait(self):
-        stream = EventStream()
-        processed_batches = []
         clock = FakeClock()
+        stream = EventStream(clock=clock)
+        processed_batches = []
 
         processor = MicroBatchProcessor(
             event_stream=stream,
@@ -118,9 +118,9 @@ class TestMicroBatchProcessor(unittest.TestCase):
         self.assertEqual(processed_batches, [])
 
     def test_partial_batch_processes_after_max_wait(self):
-        stream = EventStream()
-        processed_batches = []
         clock = FakeClock()
+        stream = EventStream(clock=clock)
+        processed_batches = []
 
         processor = MicroBatchProcessor(
             event_stream=stream,
@@ -159,9 +159,9 @@ class TestMicroBatchProcessor(unittest.TestCase):
             )
 
     def test_remaining_events_start_a_new_wait_window(self):
-        stream = EventStream()
-        processed_batches = []
         clock = FakeClock()
+        stream = EventStream(clock=clock)
+        processed_batches = []
 
         processor = MicroBatchProcessor(
             event_stream=stream,
@@ -243,10 +243,10 @@ class TestMicroBatchProcessor(unittest.TestCase):
         self.assertEqual(len(attempts), 2)
         self.assertEqual(stream.size(), 0)
 
-    def test_timeout_starts_when_processor_first_observes_events(self):
-        stream = EventStream()
-        processed_batches = []
+    def test_timeout_starts_when_event_arrives(self):
         clock = FakeClock()
+        stream = EventStream(clock=clock)
+        processed_batches = []
 
         processor = MicroBatchProcessor(
             event_stream=stream,
@@ -258,15 +258,11 @@ class TestMicroBatchProcessor(unittest.TestCase):
 
         stream.publish({"event_id": "event-1"})
 
-        # The processor has not checked the stream yet.
-        clock.advance(20)
-
+        clock.advance(9)
         result = processor.process_once()
-
-        # The timer starts when the processor first observes the events.
         self.assertEqual(result, [])
 
-        clock.advance(10)
+        clock.advance(1)
         result = processor.process_once()
 
         self.assertEqual(result, [{"event_id": "event-1"}])

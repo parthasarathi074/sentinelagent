@@ -9,11 +9,9 @@ class MicroBatchProcessor:
 
     A batch is processed when either:
     - the configured batch size is reached, or
-    - a partial batch has remained in the stream for at least
-      max_wait_seconds, measured from the first time process_once()
-      observes a non-empty stream.
+    - the oldest waiting event has waited for max_wait_seconds.
 
-    The clock can be injected for deterministic testing.
+    The processor clock is also used for streams that support set_clock().
     """
 
     def __init__(
@@ -36,15 +34,14 @@ class MicroBatchProcessor:
         self.max_wait_seconds = max_wait_seconds
         self.clock = clock if clock is not None else time.monotonic
 
+        set_stream_clock = getattr(event_stream, "set_clock", None)
+        if callable(set_stream_clock):
+            set_stream_clock(self.clock)
+
         self._batch_started_at: float | None = None
 
     def process_once(self) -> list[Any]:
-        """
-        Process one batch when either batching condition is satisfied.
-
-        The timeout begins when this method first observes a non-empty
-        stream. Returns an empty list when no processing condition is met.
-        """
+        """Process one batch when either batching condition is satisfied."""
         current_size = self.event_stream.size()
 
         if current_size == 0:
@@ -52,13 +49,22 @@ class MicroBatchProcessor:
             return []
 
         now = self.clock()
+        oldest_event_time = getattr(
+            self.event_stream, "oldest_event_time", None
+        )
 
-        if self._batch_started_at is None:
-            self._batch_started_at = now
+        batch_started_at = (
+            oldest_event_time() if callable(oldest_event_time) else None
+        )
+
+        if batch_started_at is None:
+            if self._batch_started_at is None:
+                self._batch_started_at = now
+            batch_started_at = self._batch_started_at
 
         batch_size_reached = current_size >= self.batch_size
         max_wait_reached = (
-            now - self._batch_started_at
+            now - batch_started_at
         ) >= self.max_wait_seconds
 
         if not batch_size_reached and not max_wait_reached:
