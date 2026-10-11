@@ -13,7 +13,14 @@ class TestEventStream(unittest.TestCase):
 
         self.assertEqual(stream.size(), 2)
 
-    def test_consume_batch(self):
+    def test_empty_stream_has_no_events_or_oldest_time(self):
+        stream = EventStream()
+
+        self.assertEqual(stream.size(), 0)
+        self.assertIsNone(stream.oldest_event_time())
+        self.assertEqual(stream.consume_batch(1), [])
+
+    def test_publish_and_consume_batch(self):
         stream = EventStream()
 
         stream.publish("event-1")
@@ -31,10 +38,8 @@ class TestEventStream(unittest.TestCase):
         for number in range(5):
             stream.publish(f"event-{number}")
 
-        batch = stream.consume_batch(5)
-
         self.assertEqual(
-            batch,
+            stream.consume_batch(5),
             [
                 "event-0",
                 "event-1",
@@ -44,15 +49,44 @@ class TestEventStream(unittest.TestCase):
             ],
         )
 
+    def test_consume_exact_batch_boundary(self):
+        stream = EventStream()
+
+        for number in range(6):
+            stream.publish(f"event-{number}")
+
+        first_batch = stream.consume_batch(3)
+        second_batch = stream.consume_batch(3)
+
+        self.assertEqual(first_batch, ["event-0", "event-1", "event-2"])
+        self.assertEqual(second_batch, ["event-3", "event-4", "event-5"])
+        self.assertEqual(stream.size(), 0)
+
     def test_consume_more_than_available(self):
         stream = EventStream()
 
         stream.publish("event-1")
         stream.publish("event-2")
 
-        batch = stream.consume_batch(10)
+        self.assertEqual(
+            stream.consume_batch(10),
+            ["event-1", "event-2"],
+        )
+        self.assertEqual(stream.size(), 0)
 
-        self.assertEqual(batch, ["event-1", "event-2"])
+    def test_consume_large_volume_preserves_every_event_in_order(self):
+        stream = EventStream()
+        expected = [f"event-{number}" for number in range(1000)]
+
+        for event in expected:
+            stream.publish(event)
+
+        consumed = []
+        while stream.size() > 0:
+            consumed.extend(stream.consume_batch(37))
+
+        self.assertEqual(consumed, expected)
+        self.assertEqual(len(consumed), 1000)
         self.assertEqual(stream.size(), 0)
 
     def test_invalid_batch_size(self):
@@ -61,9 +95,33 @@ class TestEventStream(unittest.TestCase):
         with self.assertRaises(ValueError):
             stream.consume_batch(0)
 
+    def test_negative_batch_size_is_rejected(self):
+        stream = EventStream()
+
+        with self.assertRaises(ValueError):
+            stream.consume_batch(-1)
+
+    def test_non_integer_batch_sizes_are_rejected(self):
+        stream = EventStream()
+
+        for invalid_size in (1.5, "2", None, True, False):
+            with self.subTest(invalid_size=invalid_size):
+                with self.assertRaises(ValueError):
+                    stream.consume_batch(invalid_size)
+
+    def test_restore_empty_batch_does_nothing(self):
+        stream = EventStream()
+        stream.publish("event-1")
+
+        stream.restore_batch([])
+
+        self.assertEqual(stream.size(), 1)
+        self.assertEqual(stream.consume_batch(1), ["event-1"])
+
     def test_restore_batch_preserves_order_at_front(self):
         stream = EventStream()
         stream.publish({"event_id": "event-3"})
+
         stream.restore_batch([
             {"event_id": "event-1"},
             {"event_id": "event-2"},

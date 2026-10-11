@@ -46,8 +46,11 @@ class EventStream:
 
     def consume_batch(self, max_events: int) -> list[Any]:
         """Remove and return up to max_events in publication order."""
+        if isinstance(max_events, bool) or not isinstance(max_events, int):
+            raise ValueError("max_events must be a positive integer")
+
         if max_events <= 0:
-            raise ValueError("max_events must be greater than zero")
+            raise ValueError("max_events must be a positive integer")
 
         batch: list[Any] = []
         arrival_times: list[float] = []
