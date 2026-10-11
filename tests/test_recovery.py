@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from sentinelagent.analysis_pipeline import AnalysisPipeline
@@ -62,6 +64,75 @@ def test_recovery_verifies_and_records_success() -> None:
     assert result.attempt == 1
 
 
+def test_recovery_logs_success(caplog: pytest.LogCaptureFixture) -> None:
+    registry, old, replacement = make_registry()
+    manager = PipelineRecoveryManager(registry)
+
+    with caplog.at_level(logging.INFO, logger="sentinelagent.recovery"):
+        result = manager.recover(
+            old.runtime_agent_id,
+            replacement.runtime_agent_id,
+        )
+
+    assert result.state == RecoveryState.RECOVERED
+    assert any("recovery_started" in message for message in caplog.messages)
+    assert any("recovery_finished" in message for message in caplog.messages)
+    assert any(old.runtime_agent_id in message for message in caplog.messages)
+    assert any(
+        replacement.runtime_agent_id in message
+        for message in caplog.messages
+    )
+    assert any("state=RECOVERED" in message for message in caplog.messages)
+
+
+def test_recovery_logs_failure(caplog: pytest.LogCaptureFixture) -> None:
+    registry, old, replacement = make_registry()
+    set_stored_agent_field(
+        registry,
+        replacement.runtime_agent_id,
+        "status",
+        AgentStatus.REGISTERED,
+    )
+    manager = PipelineRecoveryManager(registry)
+
+    with caplog.at_level(logging.WARNING, logger="sentinelagent.recovery"):
+        result = manager.recover(
+            old.runtime_agent_id,
+            replacement.runtime_agent_id,
+        )
+
+    assert result.state == RecoveryState.FAILED
+    assert any("recovery_finished" in message for message in caplog.messages)
+    assert any("state=FAILED" in message for message in caplog.messages)
+    assert any("ACTIVE" in message for message in caplog.messages)
+
+
+def test_recovery_logs_idempotent_success(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    registry, old, replacement = make_registry()
+    manager = PipelineRecoveryManager(registry)
+
+    manager.recover(
+        old.runtime_agent_id,
+        replacement.runtime_agent_id,
+    )
+
+    with caplog.at_level(logging.INFO, logger="sentinelagent.recovery"):
+        result = manager.recover(
+            old.runtime_agent_id,
+            replacement.runtime_agent_id,
+        )
+
+    assert result.state == RecoveryState.RECOVERED
+    assert result.attempt == 1
+    assert any("recovery_skipped" in message for message in caplog.messages)
+    assert any(
+        "reason=already_recovered" in message
+        for message in caplog.messages
+    )
+
+
 def test_recovery_is_idempotent_after_success() -> None:
     registry, old, replacement = make_registry()
     manager = PipelineRecoveryManager(registry)
@@ -84,7 +155,6 @@ def test_recovery_retries_after_repeated_failures() -> None:
     registry, old, replacement = make_registry()
     manager = PipelineRecoveryManager(registry)
 
-    # First attempt fails because the replacement is not ACTIVE.
     set_stored_agent_field(
         registry,
         replacement.runtime_agent_id,
@@ -102,7 +172,6 @@ def test_recovery_retries_after_repeated_failures() -> None:
     assert first.completed_at is not None
     assert "ACTIVE" in (first.reason or "")
 
-    # Second attempt fails for the same reason and increments the count.
     second = manager.recover(
         old.runtime_agent_id,
         replacement.runtime_agent_id,
@@ -113,7 +182,6 @@ def test_recovery_retries_after_repeated_failures() -> None:
     assert second.attempt == 2
     assert second.completed_at is not None
 
-    # Restore the replacement and confirm a third attempt succeeds.
     set_stored_agent_field(
         registry,
         replacement.runtime_agent_id,
@@ -351,7 +419,6 @@ def test_pipeline_process_runs_recovery_after_replacement(
     )
     assert recovery["state"] == "RECOVERED"
     assert recovery["replacement_runtime_id"] == replacement_id
-
     assert registry.get(agent.runtime_agent_id).status == (
         AgentStatus.QUARANTINED
     )

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from enum import Enum
 
 from .models import AgentStatus, utc_now
 from .registry import AgentRegistry
+
+
+logger = logging.getLogger(__name__)
 
 
 class RecoveryState(str, Enum):
@@ -79,6 +83,17 @@ class PipelineRecoveryManager:
                 )
 
             if existing.state == RecoveryState.RECOVERED:
+                logger.info(
+                    (
+                        "recovery_skipped logical_agent_id=%s "
+                        "old_runtime_id=%s replacement_runtime_id=%s "
+                        "state=%s reason=already_recovered"
+                    ),
+                    existing.logical_agent_id,
+                    old_runtime_id,
+                    replacement_runtime_id,
+                    existing.state.value,
+                )
                 return existing
 
         old_runtime = self.registry.get(old_runtime_id)
@@ -98,6 +113,17 @@ class PipelineRecoveryManager:
 
         self._records[old_runtime_id] = record
 
+        logger.info(
+            (
+                "recovery_started logical_agent_id=%s old_runtime_id=%s "
+                "replacement_runtime_id=%s attempt=%d"
+            ),
+            record.logical_agent_id,
+            old_runtime_id,
+            replacement_runtime_id,
+            record.attempt,
+        )
+
         try:
             self._verify_recovery(
                 old_runtime_id=old_runtime_id,
@@ -107,10 +133,37 @@ class PipelineRecoveryManager:
             record.state = RecoveryState.FAILED
             record.completed_at = utc_now()
             record.reason = str(exc)
+
+            logger.warning(
+                (
+                    "recovery_finished logical_agent_id=%s "
+                    "old_runtime_id=%s replacement_runtime_id=%s "
+                    "attempt=%d state=%s reason=%s"
+                ),
+                record.logical_agent_id,
+                old_runtime_id,
+                replacement_runtime_id,
+                record.attempt,
+                record.state.value,
+                record.reason,
+            )
             return record
 
         record.state = RecoveryState.RECOVERED
         record.completed_at = utc_now()
+
+        logger.info(
+            (
+                "recovery_finished logical_agent_id=%s "
+                "old_runtime_id=%s replacement_runtime_id=%s "
+                "attempt=%d state=%s"
+            ),
+            record.logical_agent_id,
+            old_runtime_id,
+            replacement_runtime_id,
+            record.attempt,
+            record.state.value,
+        )
 
         return record
 

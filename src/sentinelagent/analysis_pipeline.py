@@ -2,9 +2,10 @@ from typing import Any
 
 from sentinelagent.analysis import AnalysisEngine
 from sentinelagent.batch_worker import BatchWorker
-from sentinelagent.cross_batch import CrossBatchAnalyzer
 from sentinelagent.collusion import CollusionAssessor
-from sentinelagent.policy import PolicyDecision, PolicyEngine
+from sentinelagent.cross_batch import CrossBatchAnalyzer
+from sentinelagent.metrics import Metrics
+from sentinelagent.policy import PolicyEngine
 from sentinelagent.policy_enforcer import PolicyEnforcer
 from sentinelagent.recovery import PipelineRecoveryManager
 from sentinelagent.registry import AgentRegistry
@@ -18,6 +19,7 @@ class AnalysisPipeline:
         self.cross_batch_analyzer = CrossBatchAnalyzer()
         self.policy_engine = PolicyEngine()
         self.registry = registry
+        self.metrics = Metrics()
         self.policy_enforcer = (
             PolicyEnforcer(registry) if registry is not None else None
         )
@@ -43,8 +45,6 @@ class AnalysisPipeline:
             batch_id=batch_id,
         )
 
-        # Collusion assessment is observational only; existing policy decisions
-        # continue to be based on the established risk engine.
         policy_decisions = self.policy_engine.evaluate_analysis(
             analysis_result
         )
@@ -74,9 +74,16 @@ class AnalysisPipeline:
                         old_runtime_id=old_runtime_id,
                         replacement_runtime_id=replacement_runtime_id,
                     )
+
                     recovery_results[old_runtime_id] = (
                         recovery_record.to_dict()
                     )
+
+                    if recovery_record.attempt > 1:
+                        self.metrics.record_retried()
+
+                    if recovery_record.state.value == "FAILED":
+                        self.metrics.record_failed()
 
             analysis_result["recovery_results"] = recovery_results
         else:
@@ -91,18 +98,31 @@ class AnalysisPipeline:
         batch_id: str | None = None,
     ) -> dict[str, Any]:
         """Process one batch through analysis, policy, enforcement, and recovery."""
-        return self.batch_worker.process(
-            batch,
-            batch_id=batch_id,
-        )
+        try:
+            result = self.batch_worker.process(
+                batch,
+                batch_id=batch_id,
+            )
+        except Exception:
+            self.metrics.record_failed()
+            raise
+
+        self.metrics.record_processed(len(batch))
+
+        enforced_actions = result.get("enforced_actions", {})
+        if isinstance(enforced_actions, dict):
+            quarantined_count = sum(
+                1
+                for action in enforced_actions.values()
+                if action == "QUARANTINE"
+            )
+            if quarantined_count:
+                self.metrics.record_quarantined(quarantined_count)
+
+        return result
 
     def snapshot(self) -> dict[str, Any]:
-        """Return accumulated evidence and policy decisions without side effects.
-
-        Snapshotting is observational only. Enforcement and recovery belong to
-        batch processing so that reading system state cannot unexpectedly
-        quarantine, replace, or recover a runtime.
-        """
+        """Return accumulated evidence and policy decisions without side effects."""
         snapshot = self.cross_batch_analyzer.snapshot()
         snapshot["collusion_assessment"] = CollusionAssessor().assess(
             snapshot.get("runtime_target_interactions", {})
