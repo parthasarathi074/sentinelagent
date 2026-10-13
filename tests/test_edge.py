@@ -4,7 +4,6 @@ from sentinelagent.edge import SentinelEdge
 from sentinelagent.event_stream import EventStream
 from sentinelagent.models import (
     AgentRecord,
-    AgentStatus,
     EdgeDecision,
     EdgeRequest,
 )
@@ -12,11 +11,10 @@ from sentinelagent.registry import AgentRegistry
 
 
 class TestSentinelEdge(unittest.TestCase):
-
     def setUp(self) -> None:
         self.events = []
 
-        registry = AgentRegistry()
+        self.registry = AgentRegistry()
 
         agent_a = AgentRecord(
             logical_agent_id="agent-A",
@@ -38,16 +36,14 @@ class TestSentinelEdge(unittest.TestCase):
             credentials_reference="cred-B-001",
         )
 
-        registry.register(agent_a)
-        registry.register(agent_b)
+        self.registry.register(agent_a)
+        self.registry.register(agent_b)
 
-        registry.activate("runtime-A-001")
-        registry.activate("runtime-B-001")
-
-        self.registry = registry
+        self.registry.activate("runtime-A-001")
+        self.registry.activate("runtime-B-001")
 
         self.edge = SentinelEdge(
-            registry=registry,
+            registry=self.registry,
             event_sink=self.events.append,
         )
 
@@ -71,10 +67,8 @@ class TestSentinelEdge(unittest.TestCase):
 
         self.assertEqual(result.decision, EdgeDecision.ALLOW)
         self.assertEqual(len(self.events), 1)
-        self.assertEqual(
-            self.events[0]["decision"],
-            "ALLOW",
-        )
+        self.assertEqual(self.events[0]["decision"], "ALLOW")
+
     def test_event_is_published_to_event_stream(self) -> None:
         stream = EventStream()
 
@@ -84,7 +78,6 @@ class TestSentinelEdge(unittest.TestCase):
         )
 
         request = self.make_request()
-
         result = edge.handle(request)
 
         self.assertEqual(result.decision, EdgeDecision.ALLOW)
@@ -96,15 +89,10 @@ class TestSentinelEdge(unittest.TestCase):
         self.assertEqual(events[0]["event_id"], request.request_id)
 
     def test_unauthorized_permission_is_denied(self) -> None:
-        result = self.edge.handle(
-            self.make_request("data:write")
-        )
+        result = self.edge.handle(self.make_request("data:write"))
 
         self.assertEqual(result.decision, EdgeDecision.DENY)
-        self.assertIn(
-            "Permission not granted",
-            result.reason,
-        )
+        self.assertIn("Permission not granted", result.reason)
 
     def test_quarantined_target_is_denied(self) -> None:
         self.registry.quarantine("runtime-B-001")
@@ -112,35 +100,87 @@ class TestSentinelEdge(unittest.TestCase):
         result = self.edge.handle(self.make_request())
 
         self.assertEqual(result.decision, EdgeDecision.DENY)
-        self.assertIn(
-            "QUARANTINED",
-            result.reason,
-        )
+        self.assertIn("QUARANTINED", result.reason)
 
     def test_event_contains_security_context(self) -> None:
         result = self.edge.handle(self.make_request())
 
         event = result.event
 
-        self.assertEqual(
-            event["edge_id"],
-            "edge-agent-A-agent-B",
-        )
-
+        self.assertEqual(event["edge_id"], "edge-agent-A-agent-B")
         self.assertEqual(
             event["source_agent"]["logical_id"],
             "agent-A",
         )
-
         self.assertEqual(
             event["target_agent"]["logical_id"],
             "agent-B",
         )
+        self.assertEqual(event["decision"], "ALLOW")
 
-        self.assertEqual(
-            event["decision"],
-            "ALLOW",
+    def test_blank_required_field_is_denied_and_audited(self) -> None:
+        request = self.make_request()
+        request.requested_permission = " "
+
+        result = self.edge.handle(request)
+
+        self.assertEqual(result.decision, EdgeDecision.DENY)
+        self.assertIn("requested_permission", result.reason)
+        self.assertEqual(len(self.events), 1)
+        self.assertEqual(self.events[0]["decision"], "DENY")
+
+    def test_non_string_required_field_is_denied_and_audited(self) -> None:
+        request = self.make_request()
+        request.source_runtime_id = None
+
+        result = self.edge.handle(request)
+
+        self.assertEqual(result.decision, EdgeDecision.DENY)
+        self.assertIn("source_runtime_id", result.reason)
+        self.assertEqual(self.events[0]["decision"], "DENY")
+
+    def test_invalid_optional_field_is_denied_and_audited(self) -> None:
+        request = self.make_request()
+        request.payload_hash = 123
+
+        result = self.edge.handle(request)
+
+        self.assertEqual(result.decision, EdgeDecision.DENY)
+        self.assertIn("payload_hash", result.reason)
+        self.assertEqual(self.events[0]["decision"], "DENY")
+
+    def test_non_edge_request_is_denied_without_crashing(self) -> None:
+        result = self.edge.handle(None)
+
+        self.assertEqual(result.decision, EdgeDecision.DENY)
+        self.assertIn("EdgeRequest", result.reason)
+        self.assertEqual(len(self.events), 1)
+        self.assertEqual(self.events[0]["decision"], "DENY")
+
+    def test_unknown_runtime_is_denied_and_audited(self) -> None:
+        request = self.make_request()
+        request.source_runtime_id = "unknown-runtime"
+
+        result = self.edge.handle(request)
+
+        self.assertEqual(result.decision, EdgeDecision.DENY)
+        self.assertIn("Unknown runtime agent", result.reason)
+        self.assertEqual(self.events[0]["decision"], "DENY")
+
+    def test_audit_sink_failure_is_not_silenced(self) -> None:
+        def failing_sink(event):
+            raise RuntimeError("audit storage unavailable")
+
+        edge = SentinelEdge(
+            registry=self.registry,
+            event_sink=failing_sink,
         )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "audit storage unavailable",
+        ):
+            edge.handle(self.make_request())
 
 
 if __name__ == "__main__":
