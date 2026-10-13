@@ -5,13 +5,14 @@ from typing import Any
 
 class MicroBatchProcessor:
     """
-    Collects events from an EventStream and sends them to a batch handler.
+    Collect events from an EventStream and sends them to a batch handler.
 
     A batch is processed when either:
     - the configured batch size is reached, or
     - the oldest waiting event has waited for max_wait_seconds.
 
-    The processor clock is also used for streams that support set_clock().
+    Streams may optionally support acknowledge_batch() to finalize
+    successfully processed batches while retaining audit history.
     """
 
     def __init__(
@@ -79,6 +80,12 @@ class MicroBatchProcessor:
                 self.event_stream.restore_batch(batch)
                 self._batch_started_at = None
                 raise
+
+            acknowledge_batch = getattr(
+                self.event_stream, "acknowledge_batch", None
+            )
+            if callable(acknowledge_batch):
+                acknowledge_batch(batch)
 
         if self.event_stream.size() == 0:
             self._batch_started_at = None
