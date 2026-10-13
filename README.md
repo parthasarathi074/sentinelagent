@@ -1,4 +1,4 @@
-﻿# SentinelAgent
+# SentinelAgent
 
 SentinelAgent is a prototype security framework for multi-agent data pipelines. It explores how agent-to-agent communication can be monitored, analyzed, and governed using identity and permission checks, behavioral evidence, interaction graphs, policy enforcement, and recovery mechanisms.
 
@@ -56,17 +56,17 @@ The following remain development goals or require further validation before they
 
 ```text
 sentinelagent/
-â”œâ”€â”€ agents/       # Agent implementations
-â”œâ”€â”€ configs/      # Configuration files
-â”œâ”€â”€ detection/    # Detection and risk-analysis components
-â”œâ”€â”€ docs/         # Architecture and project documentation
-â”œâ”€â”€ enforcement/  # Policy, quarantine, replacement, and recovery
-â”œâ”€â”€ scripts/      # Development and experiment scripts
-â”œâ”€â”€ src/          # Core application code
-â”œâ”€â”€ tests/        # Automated tests
-â”œâ”€â”€ .gitattributes
-â”œâ”€â”€ .gitignore
-â””â”€â”€ README.md
+├── agents/       # Agent implementations
+├── configs/      # Configuration files
+├── detection/    # Detection and risk-analysis components
+├── docs/         # Architecture and project documentation
+├── enforcement/  # Policy, quarantine, replacement, and recovery
+├── scripts/      # Development and experiment scripts
+├── src/          # Core application code
+├── tests/        # Automated tests
+├── .gitattributes
+├── .gitignore
+└── README.md
 ```
 
 This is a high-level overview of the repository structure. Other files may exist within the listed directories.
@@ -85,11 +85,7 @@ The test suite verifies the behaviors covered by the existing tests. Passing tes
 
 ### Dependencies
 
-Python 3.13 or newer is required.
-
-Install SentinelAgent and its test dependencies with `python -m pip install -e ".[test]"`.
-
-Run tests with `python -m pytest -q`.
+The repository root currently has no `requirements.txt` file. Dependency installation instructions should be added after the project's actual dependencies and installation method have been verified.
 
 ## Development Principles
 
@@ -104,4 +100,3 @@ Run tests with `python -m pytest -q`.
 ## Project Scope
 
 SentinelAgent is an evolving prototype for experimentation and research into multi-agent pipeline security. Security decisions and recovery behavior should be evaluated in a controlled environment before any production use.
-
