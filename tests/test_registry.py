@@ -1,4 +1,7 @@
+import sqlite3
+import tempfile
 import unittest
+from pathlib import Path
 
 from sentinelagent.models import AgentRecord, AgentStatus
 from sentinelagent.registry import AgentRegistry
@@ -35,9 +38,11 @@ class TestAgentRegistry(unittest.TestCase):
         self.registry.activate(self.agent_a.runtime_agent_id)
         self.registry.activate(self.agent_b.runtime_agent_id)
 
+    def tearDown(self) -> None:
+        self.registry.close()
+
     def test_agent_is_registered_and_active(self) -> None:
         agent = self.registry.get("runtime-A-001")
-
         self.assertEqual(agent.logical_agent_id, "agent-A")
         self.assertEqual(agent.status, AgentStatus.ACTIVE)
 
@@ -47,7 +52,6 @@ class TestAgentRegistry(unittest.TestCase):
             target_runtime_id="runtime-B-001",
             requested_permission="message:send",
         )
-
         self.assertTrue(allowed)
         self.assertEqual(reason, "authorized")
 
@@ -57,25 +61,21 @@ class TestAgentRegistry(unittest.TestCase):
             target_runtime_id="runtime-B-001",
             requested_permission="data:write",
         )
-
         self.assertFalse(allowed)
         self.assertIn("Permission not granted", reason)
 
     def test_quarantine_blocks_agent(self) -> None:
         self.registry.quarantine("runtime-B-001")
-
         allowed, reason = self.registry.is_authorized(
             source_runtime_id="runtime-A-001",
             target_runtime_id="runtime-B-001",
             requested_permission="message:send",
         )
-
         self.assertFalse(allowed)
         self.assertIn("QUARANTINED", reason)
 
     def test_replacement_keeps_old_runtime_quarantined(self) -> None:
         self.registry.quarantine("runtime-B-001")
-
         self.registry.create_replacement(
             quarantined_runtime_id="runtime-B-001",
             new_runtime_id="runtime-B-002",
@@ -120,7 +120,6 @@ class TestAgentRegistry(unittest.TestCase):
 
     def test_quarantined_runtime_cannot_be_reactivated(self) -> None:
         self.registry.quarantine("runtime-B-001")
-
         with self.assertRaisesRegex(
             ValueError,
             "cannot be directly reactivated",
@@ -129,13 +128,11 @@ class TestAgentRegistry(unittest.TestCase):
 
     def test_quarantined_source_cannot_communicate(self) -> None:
         self.registry.quarantine("runtime-A-001")
-
         allowed, reason = self.registry.is_authorized(
             source_runtime_id="runtime-A-001",
             target_runtime_id="runtime-B-001",
             requested_permission="message:send",
         )
-
         self.assertFalse(allowed)
         self.assertIn("Source agent is not ACTIVE", reason)
 
@@ -152,7 +149,6 @@ class TestAgentRegistry(unittest.TestCase):
 
     def test_replacement_rejects_existing_runtime_id(self) -> None:
         self.registry.quarantine("runtime-B-001")
-
         with self.assertRaisesRegex(ValueError, "already exists"):
             self.registry.create_replacement(
                 quarantined_runtime_id="runtime-B-001",
@@ -168,7 +164,6 @@ class TestAgentRegistry(unittest.TestCase):
         agent.permissions.add("data:write")
 
         stored_agent = self.registry.get("runtime-A-001")
-
         self.assertEqual(stored_agent.status, AgentStatus.ACTIVE)
         self.assertNotIn("data:write", stored_agent.permissions)
 
@@ -184,7 +179,6 @@ class TestAgentRegistry(unittest.TestCase):
         agent.allowed_targets.clear()
 
         stored_agent = self.registry.get("runtime-A-001")
-
         self.assertEqual(stored_agent.allowed_targets, {"agent-B"})
 
     def test_repeated_quarantine_preserves_original_timestamp(
@@ -196,8 +190,8 @@ class TestAgentRegistry(unittest.TestCase):
         ).quarantined_at
 
         self.registry.quarantine("runtime-B-001")
-
         stored_agent = self.registry.get("runtime-B-001")
+
         self.assertEqual(
             stored_agent.quarantined_at,
             original_timestamp,
@@ -217,22 +211,154 @@ class TestAgentRegistry(unittest.TestCase):
         )
 
         self.registry.register(original)
-
         original.status = AgentStatus.QUARANTINED
         original.permissions.add("data:write")
         original.allowed_targets.clear()
 
         stored_agent = self.registry.get("runtime-C-001")
-
         self.assertEqual(stored_agent.status, AgentStatus.REGISTERED)
-        self.assertEqual(
-            stored_agent.permissions,
-            {"task:execute"},
-        )
-        self.assertEqual(
-            stored_agent.allowed_targets,
-            {"agent-A"},
-        )
+        self.assertEqual(stored_agent.permissions, {"task:execute"})
+        self.assertEqual(stored_agent.allowed_targets, {"agent-A"})
+
+    def test_persistent_registry_restores_quarantine_after_restart(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "registry.sqlite3"
+
+            registry = AgentRegistry(database_path)
+            try:
+                registry.register(self.agent_a)
+                registry.activate("runtime-A-001")
+                registry.quarantine("runtime-A-001")
+                original = registry.get("runtime-A-001")
+            finally:
+                registry.close()
+
+            restored = AgentRegistry(database_path)
+            try:
+                agent = restored.get("runtime-A-001")
+                self.assertEqual(agent.status, AgentStatus.QUARANTINED)
+                self.assertEqual(
+                    agent.quarantined_at,
+                    original.quarantined_at,
+                )
+                self.assertEqual(agent.permissions, {"message:send"})
+            finally:
+                restored.close()
+
+    def test_persistent_registry_restores_replacement_relationship(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "registry.sqlite3"
+
+            registry = AgentRegistry(database_path)
+            try:
+                registry.register(self.agent_a)
+                registry.activate("runtime-A-001")
+                registry.quarantine("runtime-A-001")
+                registry.create_replacement(
+                    quarantined_runtime_id="runtime-A-001",
+                    new_runtime_id="runtime-A-002",
+                    new_credentials_reference="cred-A-002",
+                )
+            finally:
+                registry.close()
+
+            restored = AgentRegistry(database_path)
+            try:
+                old_agent = restored.get("runtime-A-001")
+                replacement = restored.get("runtime-A-002")
+
+                self.assertEqual(
+                    old_agent.status,
+                    AgentStatus.QUARANTINED,
+                )
+                self.assertEqual(
+                    old_agent.replaced_by,
+                    "runtime-A-002",
+                )
+                self.assertEqual(
+                    replacement.status,
+                    AgentStatus.ACTIVE,
+                )
+                self.assertEqual(
+                    replacement.replacement_for,
+                    "runtime-A-001",
+                )
+                self.assertEqual(
+                    replacement.credentials_reference,
+                    "cred-A-002",
+                )
+            finally:
+                restored.close()
+
+    def test_replacement_transaction_rolls_back_if_old_row_is_missing(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "registry.sqlite3"
+            registry = AgentRegistry(database_path)
+
+            try:
+                registry.register(self.agent_b)
+                registry.activate("runtime-B-001")
+                registry.quarantine("runtime-B-001")
+
+                # Simulate an external database inconsistency: the runtime
+                # remains in memory, but its persisted row has disappeared.
+                connection = sqlite3.connect(database_path)
+                try:
+                    connection.execute(
+                        """
+                        DELETE FROM agent_registry
+                        WHERE runtime_agent_id = ?
+                        """,
+                        ("runtime-B-001",),
+                    )
+                    connection.commit()
+                finally:
+                    connection.close()
+
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "Failed to persist the old runtime replacement relationship",
+                ):
+                    registry.create_replacement(
+                        quarantined_runtime_id="runtime-B-001",
+                        new_runtime_id="runtime-B-002",
+                        new_credentials_reference="cred-B-002",
+                    )
+
+                # The old in-memory record must not retain the failed link.
+                old_agent = registry.get("runtime-B-001")
+                self.assertEqual(old_agent.status, AgentStatus.QUARANTINED)
+                self.assertIsNone(old_agent.replaced_by)
+
+                # The failed replacement must not remain in memory.
+                runtime_ids = {
+                    agent.runtime_agent_id
+                    for agent in registry.all_agents()
+                }
+                self.assertNotIn("runtime-B-002", runtime_ids)
+
+                # The replacement INSERT must have rolled back in SQLite.
+                connection = sqlite3.connect(database_path)
+                try:
+                    row = connection.execute(
+                        """
+                        SELECT runtime_agent_id
+                        FROM agent_registry
+                        WHERE runtime_agent_id = ?
+                        """,
+                        ("runtime-B-002",),
+                    ).fetchone()
+                    self.assertIsNone(row)
+                finally:
+                    connection.close()
+            finally:
+                registry.close()
 
 
 if __name__ == "__main__":

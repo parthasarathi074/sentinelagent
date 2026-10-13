@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
 import logging
+import sqlite3
+from copy import copy
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 
 from .models import AgentStatus, utc_now
 from .registry import AgentRegistry
@@ -42,19 +46,153 @@ class RecoveryRecord:
             "attempt": self.attempt,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict[str, object]) -> RecoveryRecord:
+        attempt = data.get("attempt", 0)
+        if (
+            not isinstance(attempt, int)
+            or isinstance(attempt, bool)
+            or attempt < 0
+        ):
+            raise ValueError(
+                "Recovery attempt must be a non-negative integer."
+            )
+
+        return cls(
+            logical_agent_id=str(data["logical_agent_id"]),
+            old_runtime_id=str(data["old_runtime_id"]),
+            replacement_runtime_id=str(data["replacement_runtime_id"]),
+            state=RecoveryState(str(data["state"])),
+            started_at=data.get("started_at"),  # type: ignore[arg-type]
+            completed_at=data.get("completed_at"),  # type: ignore[arg-type]
+            reason=data.get("reason"),  # type: ignore[arg-type]
+            attempt=attempt,
+        )
+
 
 class PipelineRecoveryManager:
     """
-    Manage logical pipeline recovery after runtime replacement.
+    Verify and persist pipeline recovery after runtime replacement.
 
-    The current implementation verifies and records recovery inside the
-    SentinelAgent registry. External scheduler/container/Kafka reconnection
-    is intentionally outside this manager until those integrations exist.
+    External scheduler, container, and Kafka reconnection are outside
+    this manager until those integrations exist.
     """
 
-    def __init__(self, registry: AgentRegistry) -> None:
+    def __init__(
+        self,
+        registry: AgentRegistry,
+        database_path: str | Path | None = None,
+    ) -> None:
         self.registry = registry
         self._records: dict[str, RecoveryRecord] = {}
+        self._connection: sqlite3.Connection | None = None
+
+        if database_path is not None:
+            self._connection = sqlite3.connect(str(database_path))
+            try:
+                self._connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS recovery_records (
+                        old_runtime_id TEXT PRIMARY KEY,
+                        record_json TEXT NOT NULL
+                    )
+                    """
+                )
+                self._connection.commit()
+                self._load_records()
+            except Exception:
+                self._connection.close()
+                self._connection = None
+                raise
+
+    def _load_records(self) -> None:
+        if self._connection is None:
+            return
+
+        rows = self._connection.execute(
+            "SELECT old_runtime_id, record_json FROM recovery_records"
+        ).fetchall()
+
+        loaded: dict[str, RecoveryRecord] = {}
+
+        for old_runtime_id, record_json in rows:
+            data = json.loads(record_json)
+            if not isinstance(data, dict):
+                raise ValueError(
+                    "Stored recovery record must be an object."
+                )
+
+            record = RecoveryRecord.from_dict(data)
+            if record.old_runtime_id != old_runtime_id:
+                raise ValueError(
+                    "Stored recovery record ID is inconsistent."
+                )
+            if old_runtime_id in loaded:
+                raise ValueError(
+                    f"Duplicate recovery record: {old_runtime_id}"
+                )
+
+            loaded[old_runtime_id] = record
+
+        self._records = loaded
+
+    def _save_record(self, record: RecoveryRecord) -> None:
+        if self._connection is None:
+            return
+
+        payload = json.dumps(record.to_dict(), sort_keys=True)
+
+        with self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO recovery_records (old_runtime_id, record_json)
+                VALUES (?, ?)
+                ON CONFLICT(old_runtime_id)
+                DO UPDATE SET record_json = excluded.record_json
+                """,
+                (record.old_runtime_id, payload),
+            )
+
+    def _publish_record(self, record: RecoveryRecord) -> RecoveryRecord:
+        """
+        Persist before publishing a candidate state.
+
+        When a record already exists, update that same object only after
+        persistence succeeds. This preserves object identity for callers
+        holding an earlier reference to the record.
+        """
+        self._save_record(record)
+
+        existing = self._records.get(record.old_runtime_id)
+        if existing is None:
+            self._records[record.old_runtime_id] = record
+            return record
+
+        if existing is record:
+            return existing
+
+        existing.logical_agent_id = record.logical_agent_id
+        existing.old_runtime_id = record.old_runtime_id
+        existing.replacement_runtime_id = record.replacement_runtime_id
+        existing.state = record.state
+        existing.started_at = record.started_at
+        existing.completed_at = record.completed_at
+        existing.reason = record.reason
+        existing.attempt = record.attempt
+
+        return existing
+
+    def close(self) -> None:
+        """Close the optional persistent database connection."""
+        if self._connection is not None:
+            self._connection.close()
+            self._connection = None
+
+    def __enter__(self) -> PipelineRecoveryManager:
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
 
     def recover(
         self,
@@ -84,11 +222,9 @@ class PipelineRecoveryManager:
 
             if existing.state == RecoveryState.RECOVERED:
                 logger.info(
-                    (
-                        "recovery_skipped logical_agent_id=%s "
-                        "old_runtime_id=%s replacement_runtime_id=%s "
-                        "state=%s reason=already_recovered"
-                    ),
+                    "recovery_skipped logical_agent_id=%s "
+                    "old_runtime_id=%s replacement_runtime_id=%s "
+                    "state=%s reason=already_recovered",
                     existing.logical_agent_id,
                     old_runtime_id,
                     replacement_runtime_id,
@@ -96,14 +232,17 @@ class PipelineRecoveryManager:
                 )
                 return existing
 
-        old_runtime = self.registry.get(old_runtime_id)
-
-        record = existing or RecoveryRecord(
-            logical_agent_id=old_runtime.logical_agent_id,
-            old_runtime_id=old_runtime_id,
-            replacement_runtime_id=replacement_runtime_id,
-            state=RecoveryState.PENDING,
-        )
+            # Do not mutate a published record until its candidate state
+            # has been persisted successfully.
+            record = copy(existing)
+        else:
+            old_runtime = self.registry.get(old_runtime_id)
+            record = RecoveryRecord(
+                logical_agent_id=old_runtime.logical_agent_id,
+                old_runtime_id=old_runtime_id,
+                replacement_runtime_id=replacement_runtime_id,
+                state=RecoveryState.PENDING,
+            )
 
         record.state = RecoveryState.RECOVERING
         record.started_at = record.started_at or utc_now()
@@ -111,13 +250,12 @@ class PipelineRecoveryManager:
         record.reason = reason
         record.attempt += 1
 
-        self._records[old_runtime_id] = record
+        # A failed write leaves the previously published object unchanged.
+        record = self._publish_record(record)
 
         logger.info(
-            (
-                "recovery_started logical_agent_id=%s old_runtime_id=%s "
-                "replacement_runtime_id=%s attempt=%d"
-            ),
+            "recovery_started logical_agent_id=%s old_runtime_id=%s "
+            "replacement_runtime_id=%s attempt=%d",
             record.logical_agent_id,
             old_runtime_id,
             replacement_runtime_id,
@@ -130,42 +268,43 @@ class PipelineRecoveryManager:
                 replacement_runtime_id=replacement_runtime_id,
             )
         except (KeyError, ValueError) as exc:
-            record.state = RecoveryState.FAILED
-            record.completed_at = utc_now()
-            record.reason = str(exc)
+            failed_record = copy(record)
+            failed_record.state = RecoveryState.FAILED
+            failed_record.completed_at = utc_now()
+            failed_record.reason = str(exc)
+
+            # Only publish FAILED if that state was persisted successfully.
+            failed_record = self._publish_record(failed_record)
 
             logger.warning(
-                (
-                    "recovery_finished logical_agent_id=%s "
-                    "old_runtime_id=%s replacement_runtime_id=%s "
-                    "attempt=%d state=%s reason=%s"
-                ),
-                record.logical_agent_id,
+                "recovery_finished logical_agent_id=%s old_runtime_id=%s "
+                "replacement_runtime_id=%s attempt=%d state=%s reason=%s",
+                failed_record.logical_agent_id,
                 old_runtime_id,
                 replacement_runtime_id,
-                record.attempt,
-                record.state.value,
-                record.reason,
+                failed_record.attempt,
+                failed_record.state.value,
+                failed_record.reason,
             )
-            return record
+            return failed_record
 
-        record.state = RecoveryState.RECOVERED
-        record.completed_at = utc_now()
+        recovered_record = copy(record)
+        recovered_record.state = RecoveryState.RECOVERED
+        recovered_record.completed_at = utc_now()
+
+        # If this write fails, the published state remains RECOVERING.
+        recovered_record = self._publish_record(recovered_record)
 
         logger.info(
-            (
-                "recovery_finished logical_agent_id=%s "
-                "old_runtime_id=%s replacement_runtime_id=%s "
-                "attempt=%d state=%s"
-            ),
-            record.logical_agent_id,
+            "recovery_finished logical_agent_id=%s old_runtime_id=%s "
+            "replacement_runtime_id=%s attempt=%d state=%s",
+            recovered_record.logical_agent_id,
             old_runtime_id,
             replacement_runtime_id,
-            record.attempt,
-            record.state.value,
+            recovered_record.attempt,
+            recovered_record.state.value,
         )
-
-        return record
+        return recovered_record
 
     def get(self, old_runtime_id: str) -> RecoveryRecord | None:
         return self._records.get(old_runtime_id)
@@ -197,10 +336,7 @@ class PipelineRecoveryManager:
                 "Recovery requires the replacement runtime to be ACTIVE."
             )
 
-        if (
-            old_runtime.logical_agent_id
-            != replacement_runtime.logical_agent_id
-        ):
+        if old_runtime.logical_agent_id != replacement_runtime.logical_agent_id:
             raise ValueError(
                 "Old and replacement runtimes belong to different "
                 "logical agents."
@@ -211,10 +347,7 @@ class PipelineRecoveryManager:
                 "Old runtime replacement relationship is inconsistent."
             )
 
-        if (
-            replacement_runtime.replacement_for
-            != old_runtime.runtime_agent_id
-        ):
+        if replacement_runtime.replacement_for != old_runtime.runtime_agent_id:
             raise ValueError(
                 "Replacement runtime relationship is inconsistent."
             )
@@ -238,10 +371,8 @@ class PipelineRecoveryManager:
         active_runtimes = [
             agent
             for agent in self.registry.all_agents()
-            if (
-                agent.logical_agent_id == old_runtime.logical_agent_id
-                and agent.status == AgentStatus.ACTIVE
-            )
+            if agent.logical_agent_id == old_runtime.logical_agent_id
+            and agent.status == AgentStatus.ACTIVE
         ]
 
         if len(active_runtimes) != 1:

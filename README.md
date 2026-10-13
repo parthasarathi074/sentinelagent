@@ -75,6 +75,20 @@ This is a high-level overview of the repository structure. Other files may exist
 
 Run commands from the repository root in PowerShell.
 
+### Python requirement
+
+Python 3.13 or newer is required.
+
+### Install the package and test dependencies
+
+The project declares no runtime dependencies. Install the package in editable mode with its test dependencies:
+
+```powershell
+python -m pip install -e ".[test]"
+```
+
+The `test` extra installs pytest.
+
 ### Run the automated tests
 
 ```powershell
@@ -83,9 +97,16 @@ python -m pytest -q
 
 The test suite verifies the behaviors covered by the existing tests. Passing tests do not guarantee that every attack scenario is detected or that the prototype is production-ready.
 
-### Dependencies
+### Build the package
 
-The repository root currently has no `requirements.txt` file. Dependency installation instructions should be added after the project's actual dependencies and installation method have been verified.
+Install the build frontend and build the source distribution and wheel:
+
+```powershell
+python -m pip install build
+python -m build
+```
+
+The generated distribution files are written to the `dist/` directory. The package build verifies distribution creation; it does not certify the project as production-ready.
 
 ## Development Principles
 
