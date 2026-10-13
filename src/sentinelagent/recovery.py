@@ -306,6 +306,28 @@ class PipelineRecoveryManager:
         )
         return recovered_record
 
+    def resume_pending_recoveries(self) -> dict[str, RecoveryRecord]:
+        """Explicitly resume persisted PENDING and RECOVERING records."""
+        results: dict[str, RecoveryRecord] = {}
+
+        pending_records = [
+            (old_runtime_id, record.replacement_runtime_id)
+            for old_runtime_id, record in self._records.items()
+            if record.state in {
+                RecoveryState.PENDING,
+                RecoveryState.RECOVERING,
+            }
+        ]
+
+        for old_runtime_id, replacement_runtime_id in pending_records:
+            result = self.recover(
+                old_runtime_id=old_runtime_id,
+                replacement_runtime_id=replacement_runtime_id,
+            )
+            results[old_runtime_id] = result
+
+        return results
+
     def get(self, old_runtime_id: str) -> RecoveryRecord | None:
         return self._records.get(old_runtime_id)
 

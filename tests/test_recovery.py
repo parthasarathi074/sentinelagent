@@ -181,9 +181,11 @@ def test_recovery_rejects_different_replacement_for_existing_recovery() -> None:
 def test_recovery_fails_if_old_runtime_is_not_quarantined() -> None:
     registry, old, replacement = make_registry()
     set_stored_agent_field(registry, old.runtime_agent_id, "status", AgentStatus.ACTIVE)
+
     result = PipelineRecoveryManager(registry).recover(
         old.runtime_agent_id, replacement.runtime_agent_id
     )
+
     assert result.state == RecoveryState.FAILED
     assert "QUARANTINED" in (result.reason or "")
 
@@ -193,9 +195,11 @@ def test_recovery_fails_if_replacement_is_not_active() -> None:
     set_stored_agent_field(
         registry, replacement.runtime_agent_id, "status", AgentStatus.REGISTERED
     )
+
     result = PipelineRecoveryManager(registry).recover(
         old.runtime_agent_id, replacement.runtime_agent_id
     )
+
     assert result.state == RecoveryState.FAILED
     assert "ACTIVE" in (result.reason or "")
 
@@ -205,9 +209,11 @@ def test_recovery_fails_for_wrong_logical_agent() -> None:
     set_stored_agent_field(
         registry, replacement.runtime_agent_id, "logical_agent_id", "different-agent"
     )
+
     result = PipelineRecoveryManager(registry).recover(
         old.runtime_agent_id, replacement.runtime_agent_id
     )
+
     assert result.state == RecoveryState.FAILED
     assert "different logical agents" in (result.reason or "")
 
@@ -215,9 +221,11 @@ def test_recovery_fails_for_wrong_logical_agent() -> None:
 def test_recovery_fails_when_relationship_is_inconsistent() -> None:
     registry, old, replacement = make_registry()
     set_stored_agent_field(registry, old.runtime_agent_id, "replaced_by", None)
+
     result = PipelineRecoveryManager(registry).recover(
         old.runtime_agent_id, replacement.runtime_agent_id
     )
+
     assert result.state == RecoveryState.FAILED
     assert "relationship" in (result.reason or "")
 
@@ -240,6 +248,7 @@ def test_recovery_requires_exactly_one_active_runtime() -> None:
     result = PipelineRecoveryManager(registry).recover(
         old.runtime_agent_id, replacement.runtime_agent_id
     )
+
     assert result.state == RecoveryState.FAILED
     assert "exactly one ACTIVE" in (result.reason or "")
 
@@ -252,9 +261,11 @@ def test_recovery_requires_fresh_credentials() -> None:
         "credentials_reference",
         old.credentials_reference,
     )
+
     result = PipelineRecoveryManager(registry).recover(
         old.runtime_agent_id, replacement.runtime_agent_id
     )
+
     assert result.state == RecoveryState.FAILED
     assert "different credentials" in (result.reason or "")
 
@@ -265,6 +276,7 @@ def test_recovery_snapshot_is_json_safe() -> None:
     manager.recover(old.runtime_agent_id, replacement.runtime_agent_id)
 
     snapshot = manager.snapshot_json()
+
     assert snapshot[old.runtime_agent_id]["state"] == "RECOVERED"
     assert (
         snapshot[old.runtime_agent_id]["replacement_runtime_id"]
@@ -292,7 +304,10 @@ def test_pipeline_process_runs_recovery_after_replacement(monkeypatch) -> None:
     replacement_id = result["replacement_runtime_ids"][agent.runtime_agent_id]
     recovery = result["recovery_results"][agent.runtime_agent_id]
 
-    assert result["enforced_actions"][agent.runtime_agent_id] == PolicyAction.QUARANTINE.value
+    assert (
+        result["enforced_actions"][agent.runtime_agent_id]
+        == PolicyAction.QUARANTINE.value
+    )
     assert recovery["state"] == "RECOVERED"
     assert recovery["replacement_runtime_id"] == replacement_id
     assert registry.get(agent.runtime_agent_id).status == AgentStatus.QUARANTINED
@@ -326,6 +341,7 @@ def test_pipeline_snapshot_exposes_recovery_results() -> None:
         replacement_runtime_id=replacement_id,
     )
     snapshot = pipeline.snapshot()
+
     assert snapshot["recovery_results"][agent.runtime_agent_id]["state"] == "RECOVERED"
 
 
@@ -363,7 +379,9 @@ def test_recovery_state_persists_after_manager_restart(tmp_path) -> None:
         registry.close()
 
 
-def test_interrupted_recovery_can_resume_after_restart(tmp_path, monkeypatch) -> None:
+def test_interrupted_recovery_resumes_explicitly_after_restart(
+    tmp_path, monkeypatch
+) -> None:
     registry_path = tmp_path / "registry.db"
     recovery_path = tmp_path / "recovery.db"
 
@@ -390,13 +408,168 @@ def test_interrupted_recovery_can_resume_after_restart(tmp_path, monkeypatch) ->
         assert restored.state == RecoveryState.RECOVERING
         assert restored.attempt == 1
 
-        resumed = manager.recover(old.runtime_agent_id, replacement.runtime_agent_id)
+        # Construction alone must not resume interrupted recovery.
+        assert restored.state == RecoveryState.RECOVERING
+        assert restored.attempt == 1
+
+        results = manager.resume_pending_recoveries()
+
+        assert set(results) == {old.runtime_agent_id}
+        resumed = results[old.runtime_agent_id]
         assert resumed.state == RecoveryState.RECOVERED
+        assert resumed.replacement_runtime_id == replacement.runtime_agent_id
         assert resumed.attempt == 2
         assert resumed.completed_at is not None
     finally:
         manager.close()
         registry.close()
+
+
+def test_resume_pending_recoveries_is_idempotent(tmp_path) -> None:
+    registry_path = tmp_path / "registry.db"
+    recovery_path = tmp_path / "recovery.db"
+
+    registry = AgentRegistry(database_path=registry_path)
+    old, replacement = populate_registry(registry)
+    manager = PipelineRecoveryManager(registry, database_path=recovery_path)
+
+    try:
+        # Persist an interrupted recovery without completing verification.
+        original_verify = manager._verify_recovery
+
+        def interrupt_verification(**kwargs):
+            raise RuntimeError("simulated interruption")
+
+        manager._verify_recovery = interrupt_verification
+        with pytest.raises(RuntimeError, match="simulated interruption"):
+            manager.recover(old.runtime_agent_id, replacement.runtime_agent_id)
+        manager._verify_recovery = original_verify
+
+        first_results = manager.resume_pending_recoveries()
+        first = first_results[old.runtime_agent_id]
+        assert first.state == RecoveryState.RECOVERED
+        assert first.attempt == 2
+
+        second_results = manager.resume_pending_recoveries()
+        assert second_results == {}
+        record = manager.get(old.runtime_agent_id)
+        assert record is not None
+        assert record.attempt == 2
+    finally:
+        manager.close()
+        registry.close()
+
+
+def test_resume_pending_recoveries_handles_multiple_records(tmp_path) -> None:
+    registry_path = tmp_path / "registry.db"
+    recovery_path = tmp_path / "recovery.db"
+
+    registry = AgentRegistry(database_path=registry_path)
+    old_one, replacement_one = populate_registry(registry)
+
+    old_two = AgentRecord(
+        logical_agent_id="validator-02",
+        runtime_agent_id="runtime-validator-two-old",
+        role="validator",
+        version="1.0",
+        permissions={"validate"},
+        allowed_targets={"processor-02"},
+        status=AgentStatus.ACTIVE,
+        credentials_reference="credentials-two-old",
+    )
+    registry.register(old_two)
+    registry.quarantine(old_two.runtime_agent_id)
+    replacement_two = registry.create_replacement(
+        quarantined_runtime_id=old_two.runtime_agent_id,
+        new_runtime_id="runtime-validator-two-new",
+        new_credentials_reference="credentials-two-new",
+    )
+
+    manager = PipelineRecoveryManager(registry, database_path=recovery_path)
+
+    try:
+        for old, replacement in (
+            (old_one, replacement_one),
+            (old_two, replacement_two),
+        ):
+            with pytest.raises(RuntimeError, match="simulated interruption"):
+                manager._verify_recovery = lambda **kwargs: (_ for _ in ()).throw(
+                    RuntimeError("simulated interruption")
+                )
+                manager.recover(old.runtime_agent_id, replacement.runtime_agent_id)
+
+        manager._verify_recovery = PipelineRecoveryManager._verify_recovery.__get__(
+            manager, PipelineRecoveryManager
+        )
+
+        results = manager.resume_pending_recoveries()
+
+        assert set(results) == {
+            old_one.runtime_agent_id,
+            old_two.runtime_agent_id,
+        }
+        assert (
+            results[old_one.runtime_agent_id].replacement_runtime_id
+            == replacement_one.runtime_agent_id
+        )
+        assert (
+            results[old_two.runtime_agent_id].replacement_runtime_id
+            == replacement_two.runtime_agent_id
+        )
+        assert all(record.state == RecoveryState.RECOVERED for record in results.values())
+    finally:
+        manager.close()
+        registry.close()
+
+
+def test_resume_pending_recoveries_returns_validation_failures() -> None:
+    registry, old, replacement = make_registry()
+    manager = PipelineRecoveryManager(registry)
+    set_stored_agent_field(
+        registry, replacement.runtime_agent_id, "status", AgentStatus.REGISTERED
+    )
+
+    try:
+        # Create a persisted unfinished record, then let normal validation fail.
+        with pytest.raises(RuntimeError, match="simulated interruption"):
+            manager._verify_recovery = lambda **kwargs: (_ for _ in ()).throw(
+                RuntimeError("simulated interruption")
+            )
+            manager.recover(old.runtime_agent_id, replacement.runtime_agent_id)
+
+        manager._verify_recovery = PipelineRecoveryManager._verify_recovery.__get__(
+            manager, PipelineRecoveryManager
+        )
+        results = manager.resume_pending_recoveries()
+
+        assert results[old.runtime_agent_id].state == RecoveryState.FAILED
+        assert "ACTIVE" in (results[old.runtime_agent_id].reason or "")
+    finally:
+        manager.close()
+
+
+def test_resume_pending_recoveries_propagates_unexpected_errors() -> None:
+    registry, old, replacement = make_registry()
+    manager = PipelineRecoveryManager(registry)
+
+    try:
+        with pytest.raises(RuntimeError, match="simulated interruption"):
+            manager._verify_recovery = lambda **kwargs: (_ for _ in ()).throw(
+                RuntimeError("simulated interruption")
+            )
+            manager.recover(old.runtime_agent_id, replacement.runtime_agent_id)
+
+        with pytest.raises(RuntimeError, match="simulated resume failure"):
+            manager._verify_recovery = lambda **kwargs: (_ for _ in ()).throw(
+                RuntimeError("simulated resume failure")
+            )
+            manager.resume_pending_recoveries()
+
+        record = manager.get(old.runtime_agent_id)
+        assert record is not None
+        assert record.state == RecoveryState.RECOVERING
+    finally:
+        manager.close()
 
 
 def test_initial_checkpoint_failure_does_not_publish_record(
