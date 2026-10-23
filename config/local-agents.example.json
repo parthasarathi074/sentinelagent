@@ -1,0 +1,22 @@
+{
+  "agents": [
+    {
+      "logical_agent_id": "agent-A",
+      "runtime_agent_id": "runtime-A-001",
+      "role": "ingest",
+      "version": "1.0",
+      "permissions": ["message:send"],
+      "allowed_targets": ["agent-B"],
+      "activate_on_first_registration": true
+    },
+    {
+      "logical_agent_id": "agent-B",
+      "runtime_agent_id": "runtime-B-001",
+      "role": "validator",
+      "version": "1.0",
+      "permissions": ["validation:execute"],
+      "allowed_targets": ["agent-A"],
+      "activate_on_first_registration": true
+    }
+  ]
+}

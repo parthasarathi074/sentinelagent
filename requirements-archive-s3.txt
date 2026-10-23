@@ -1,0 +1,2 @@
+# Optional S3-compatible archive backend
+boto3>=1.35

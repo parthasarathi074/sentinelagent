@@ -1,0 +1,2 @@
+# Optional production Kafka transport adapter
+confluent-kafka>=2.5
