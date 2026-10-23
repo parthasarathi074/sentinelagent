@@ -66,6 +66,10 @@ class AnalysisEngine:
                 event_ids.append(event_id)
 
             source_runtime_id = event.get("source_runtime_id")
+            if "source_runtime_id" not in event:
+                source_agent = event.get("source_agent")
+                if isinstance(source_agent, dict):
+                    source_runtime_id = source_agent.get("runtime_id")
 
             if (
                 not isinstance(source_runtime_id, str)
@@ -79,6 +83,10 @@ class AnalysisEngine:
             )
 
             target_runtime_id = event.get("target_runtime_id")
+            if "target_runtime_id" not in event:
+                target_agent = event.get("target_agent")
+                if isinstance(target_agent, dict):
+                    target_runtime_id = target_agent.get("runtime_id")
 
             if target_runtime_id is not None:
                 if (

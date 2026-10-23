@@ -7,7 +7,11 @@ import pytest
 from sentinelagent.analysis_pipeline import AnalysisPipeline
 from sentinelagent.models import AgentRecord, AgentStatus
 from sentinelagent.policy import PolicyAction, PolicyDecision
-from sentinelagent.recovery import PipelineRecoveryManager, RecoveryState
+from sentinelagent.recovery import (
+    PipelineRecoveryManager,
+    RecoveryRecord,
+    RecoveryState,
+)
 from sentinelagent.registry import AgentRegistry
 
 
@@ -686,3 +690,51 @@ def test_final_checkpoint_failure_leaves_recovering_state(
     finally:
         restored_manager.close()
         restored_registry.close()
+
+
+@pytest.mark.parametrize("attempt", [-1, True, False, 1.5, "1", None])
+def test_recovery_record_rejects_invalid_attempt(attempt) -> None:
+    with pytest.raises(
+        ValueError,
+        match="Recovery attempt must be a non-negative integer",
+    ):
+        RecoveryRecord.from_dict(
+            {
+                "logical_agent_id": "validator-01",
+                "old_runtime_id": "runtime-validator-old",
+                "replacement_runtime_id": "runtime-validator-new",
+                "state": RecoveryState.PENDING.value,
+                "attempt": attempt,
+            }
+        )
+
+
+def test_recovery_manager_rejects_corrupted_persisted_json(tmp_path) -> None:
+    database_path = tmp_path / "recovery.db"
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE recovery_records (
+                old_runtime_id TEXT PRIMARY KEY,
+                record_json TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO recovery_records (old_runtime_id, record_json)
+            VALUES (?, ?)
+            """,
+            ("runtime-validator-old", "{invalid-json"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    registry, _, _ = make_registry()
+    try:
+        with pytest.raises(json.JSONDecodeError):
+            PipelineRecoveryManager(registry, database_path=database_path)
+    finally:
+        registry.close()

@@ -121,19 +121,6 @@ class PersistentEventStream:
                 WHERE status = 'in_flight'
                 """
             )
-            self._connection.execute(
-                """
-                DELETE FROM batch_events
-                WHERE batch_id IN (
-                    SELECT batch_id
-                    FROM batches
-                    WHERE status = 'in_flight'
-                )
-                """
-            )
-            self._connection.execute(
-                "DELETE FROM batches WHERE status = 'in_flight'"
-            )
 
     def publish(self, event: Any) -> int:
         """Persist a JSON-serializable event and return its sequence."""
@@ -206,31 +193,158 @@ class PersistentEventStream:
             if not rows:
                 return []
 
-            self._connection.execute(
-                "INSERT INTO batches (batch_id, status) VALUES (?, ?)",
-                (batch_id, "in_flight"),
-            )
-
-            for row in rows:
-                self._connection.execute(
-                    """
-                    INSERT INTO batch_events (batch_id, sequence_number)
-                    VALUES (?, ?)
-                    """,
-                    (batch_id, row["sequence_number"]),
+            sequence_numbers = [
+                int(row["sequence_number"]) for row in rows
+            ]
+            placeholders = ", ".join("?" for _ in sequence_numbers)
+            linked_batches = self._connection.execute(
+                f"""
+                SELECT DISTINCT batch_events.batch_id, batches.status
+                FROM batch_events
+                JOIN batches USING (batch_id)
+                WHERE batch_events.sequence_number IN ({placeholders})
+                """,
+                sequence_numbers,
+            ).fetchall()
+            if any(row["status"] != "in_flight" for row in linked_batches):
+                raise RuntimeError(
+                    "Pending events are linked to a completed batch"
                 )
+            linked_batch_ids = [
+                str(row["batch_id"]) for row in linked_batches
+            ]
+
+            if linked_batch_ids:
+                # Retry the oldest existing batch before selecting events
+                # belonging to other batches.
+                existing_batch_id = self._connection.execute(
+                    """
+                    SELECT batch_events.batch_id
+                    FROM batch_events
+                    JOIN batches USING (batch_id)
+                    WHERE batch_events.sequence_number IN (
+                        SELECT sequence_number
+                        FROM events
+                        WHERE status = 'pending'
+                        ORDER BY sequence_number
+                        LIMIT ?
+                    )
+                    AND batches.status = 'in_flight'
+                    ORDER BY (
+                        SELECT MIN(sequence_number)
+                        FROM batch_events AS existing_events
+                        WHERE existing_events.batch_id = batch_events.batch_id
+                    )
+                    LIMIT 1
+                    """,
+                    (max_events,),
+                ).fetchone()["batch_id"]
+                existing_batch_id = str(existing_batch_id)
+                existing_batch = self._connection.execute(
+                    """
+                    SELECT sequence_number
+                    FROM batch_events
+                    WHERE batch_id = ?
+                    ORDER BY sequence_number
+                    """,
+                    (existing_batch_id,),
+                ).fetchall()
+                existing_sequence_numbers = [
+                    int(row["sequence_number"])
+                    for row in existing_batch
+                ]
+                selected_sequence_numbers = [
+                    sequence_number
+                    for sequence_number in existing_sequence_numbers
+                    if sequence_number in sequence_numbers
+                ][:max_events]
+                # Give unselected events their own batch so acknowledging
+                # this partial retry cannot complete events not returned.
+                remaining_sequence_numbers = [
+                    sequence_number
+                    for sequence_number in existing_sequence_numbers
+                    if sequence_number not in selected_sequence_numbers
+                ]
+                if remaining_sequence_numbers:
+                    remaining_batch_id = str(uuid.uuid4())
+                    self._connection.execute(
+                        """
+                        INSERT INTO batches (batch_id, status)
+                        VALUES (?, ?)
+                        """,
+                        (remaining_batch_id, "in_flight"),
+                    )
+                    for sequence_number in remaining_sequence_numbers:
+                        self._connection.execute(
+                            """
+                            UPDATE batch_events
+                            SET batch_id = ?
+                            WHERE batch_id = ? AND sequence_number = ?
+                            """,
+                            (
+                                remaining_batch_id,
+                                existing_batch_id,
+                                sequence_number,
+                            ),
+                        )
+                rows = [
+                    row
+                    for row in rows
+                    if int(row["sequence_number"])
+                    in selected_sequence_numbers
+                ]
+                sequence_numbers = selected_sequence_numbers
+                batch_id = existing_batch_id
+
+            if batch_id not in linked_batch_ids:
+                for linked_batch_id in linked_batch_ids:
+                    self._connection.execute(
+                        "DELETE FROM batch_events WHERE batch_id = ?",
+                        (linked_batch_id,),
+                    )
+                    self._connection.execute(
+                        """
+                        DELETE FROM batches
+                        WHERE batch_id = ? AND status = 'in_flight'
+                        """,
+                        (linked_batch_id,),
+                    )
+                self._connection.execute(
+                    "INSERT INTO batches (batch_id, status) VALUES (?, ?)",
+                    (batch_id, "in_flight"),
+                )
+
+                for row in rows:
+                    self._connection.execute(
+                        """
+                        INSERT INTO batch_events (batch_id, sequence_number)
+                        VALUES (?, ?)
+                        """,
+                        (batch_id, row["sequence_number"]),
+                    )
+
+            for sequence_number in sequence_numbers:
                 self._connection.execute(
                     """
                     UPDATE events
                     SET status = 'in_flight'
                     WHERE sequence_number = ?
                     """,
-                    (row["sequence_number"],),
+                    (sequence_number,),
                 )
 
         batch = [json.loads(row["event_json"]) for row in rows]
         self._active_batches[id(batch)] = batch_id
         return batch
+
+    def batch_id_for(self, batch: list[Any]) -> str:
+        """Return the stable identifier assigned to a consumed batch."""
+        batch_id = self._active_batches.get(id(batch))
+        if batch_id is None:
+            raise ValueError(
+                "Cannot identify a batch not consumed by this stream"
+            )
+        return batch_id
 
     def restore_batch(self, batch: list[Any]) -> None:
         """Return an uncompleted batch to the pending queue."""
@@ -254,14 +368,6 @@ class PersistentEventStream:
                     WHERE batch_id = ?
                 )
                 """,
-                (batch_id,),
-            )
-            self._connection.execute(
-                "DELETE FROM batch_events WHERE batch_id = ?",
-                (batch_id,),
-            )
-            self._connection.execute(
-                "DELETE FROM batches WHERE batch_id = ?",
                 (batch_id,),
             )
 

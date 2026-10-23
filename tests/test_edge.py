@@ -1,3 +1,4 @@
+import logging
 import unittest
 
 from sentinelagent.edge import SentinelEdge
@@ -68,6 +69,18 @@ class TestSentinelEdge(unittest.TestCase):
         self.assertEqual(result.decision, EdgeDecision.ALLOW)
         self.assertEqual(len(self.events), 1)
         self.assertEqual(self.events[0]["decision"], "ALLOW")
+
+    def test_decision_emits_structured_log_with_runtime_context(self) -> None:
+        with self.assertLogs("sentinelagent.edge", level=logging.INFO) as captured:
+            result = self.edge.handle(self.make_request())
+
+        self.assertEqual(result.decision, EdgeDecision.ALLOW)
+        message = "\n".join(captured.output)
+        self.assertIn("sentinel_edge_decision", message)
+        self.assertIn("req-001", message)
+        self.assertIn("runtime-A-001", message)
+        self.assertIn("runtime-B-001", message)
+        self.assertIn("decision='ALLOW'", message)
 
     def test_event_is_published_to_event_stream(self) -> None:
         stream = EventStream()
@@ -166,6 +179,56 @@ class TestSentinelEdge(unittest.TestCase):
         self.assertEqual(result.decision, EdgeDecision.DENY)
         self.assertIn("Unknown runtime agent", result.reason)
         self.assertEqual(self.events[0]["decision"], "DENY")
+        self.assertEqual(
+            self.events[0]["source_agent"]["runtime_id"],
+            "unknown-runtime",
+        )
+        self.assertEqual(
+            self.events[0]["target_agent"]["runtime_id"],
+            "runtime-B-001",
+        )
+
+    def test_quarantined_runtime_is_blocked_and_replacement_can_reconnect(
+        self,
+    ) -> None:
+        from sentinelagent.models import AgentStatus
+        from sentinelagent.replacement import RuntimeReplacementManager
+
+        old_runtime_id = "runtime-A-001"
+        self.registry.quarantine(old_runtime_id)
+
+        replacement_manager = RuntimeReplacementManager(self.registry)
+        replacement_runtime_id = replacement_manager.replace(old_runtime_id)
+
+        old_result = self.edge.handle(self.make_request())
+
+        replacement_request = self.make_request()
+        replacement_request.request_id = "req-replacement-001"
+        replacement_request.trace_id = "trace-replacement-001"
+        replacement_request.source_runtime_id = replacement_runtime_id
+        replacement_result = self.edge.handle(replacement_request)
+
+        self.assertEqual(old_result.decision, EdgeDecision.DENY)
+        self.assertIn(
+            "Source agent is not ACTIVE: QUARANTINED",
+            old_result.reason,
+        )
+        self.assertEqual(replacement_result.decision, EdgeDecision.ALLOW)
+        self.assertEqual(
+            self.registry.get(old_runtime_id).status,
+            AgentStatus.QUARANTINED,
+        )
+        replacement = self.registry.get(replacement_runtime_id)
+        self.assertEqual(replacement.status, AgentStatus.ACTIVE)
+        self.assertEqual(replacement.replacement_for, old_runtime_id)
+        self.assertEqual(
+            [event["decision"] for event in self.events],
+            ["DENY", "ALLOW"],
+        )
+        self.assertEqual(
+            self.events[1]["source_agent"]["runtime_id"],
+            replacement_runtime_id,
+        )
 
     def test_audit_sink_failure_is_not_silenced(self) -> None:
         def failing_sink(event):

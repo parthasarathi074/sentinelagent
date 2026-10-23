@@ -162,6 +162,51 @@ def test_micro_batch_restores_failed_sqlite_batch(tmp_path):
         stream.close()
 
 
+def test_batch_id_is_preserved_after_restart_recovery(tmp_path):
+    database_path = tmp_path / "events.db"
+    stream = PersistentEventStream(database_path)
+    stream.publish({"agent": "A"})
+
+    batch = stream.consume_batch(1)
+    original_batch_id = stream.batch_id_for(batch)
+    stream.close()
+
+    recovered_stream = PersistentEventStream(database_path)
+    try:
+        recovered_batch = recovered_stream.consume_batch(1)
+
+        assert recovered_batch == [{"agent": "A"}]
+        assert recovered_stream.batch_id_for(recovered_batch) == original_batch_id
+        recovered_stream.acknowledge_batch(recovered_batch)
+    finally:
+        recovered_stream.close()
+
+
+def test_retry_keeps_original_batch_separate_from_new_events(tmp_path):
+    stream = PersistentEventStream(tmp_path / "events.db")
+
+    try:
+        stream.publish({"agent": "A"})
+        failed_batch = stream.consume_batch(1)
+        original_batch_id = stream.batch_id_for(failed_batch)
+
+        stream.restore_batch(failed_batch)
+        stream.publish({"agent": "B"})
+
+        retry_batch = stream.consume_batch(2)
+
+        assert retry_batch == [{"agent": "A"}]
+        assert stream.batch_id_for(retry_batch) == original_batch_id
+
+        stream.acknowledge_batch(retry_batch)
+
+        next_batch = stream.consume_batch(2)
+        assert next_batch == [{"agent": "B"}]
+        assert stream.batch_id_for(next_batch) != original_batch_id
+    finally:
+        stream.close()
+
+
 def test_micro_batch_still_works_with_in_memory_event_stream():
     stream = EventStream()
     stream.publish({"agent": "A"})
@@ -310,3 +355,51 @@ def test_incompatible_legacy_schema_is_rejected_without_data_loss(tmp_path):
     assert after[1] == [(1, '{"agent": "A"}', 123.0, "in_flight")]
     assert after[2] == [("batch-1", "in_flight")]
     assert after[3] == [("batch-1", 1)]
+
+
+def test_restored_batches_keep_separate_ids_when_retried_together(tmp_path):
+    stream = PersistentEventStream(tmp_path / "events.db")
+    try:
+        stream.publish({"agent": "A"})
+        stream.publish({"agent": "B"})
+        batch_a = stream.consume_batch(1)
+        batch_a_id = stream.batch_id_for(batch_a)
+        batch_b = stream.consume_batch(1)
+        batch_b_id = stream.batch_id_for(batch_b)
+        assert batch_a_id != batch_b_id
+        stream.restore_batch(batch_a)
+        stream.restore_batch(batch_b)
+        retry_a = stream.consume_batch(2)
+        # A retry must not merge two separately identified batches.
+        assert retry_a == [{"agent": "A"}]
+        assert stream.batch_id_for(retry_a) == batch_a_id
+        stream.acknowledge_batch(retry_a)
+        retry_b = stream.consume_batch(2)
+        assert retry_b == [{"agent": "B"}]
+        assert stream.batch_id_for(retry_b) == batch_b_id
+        stream.acknowledge_batch(retry_b)
+    finally:
+        stream.close()
+
+
+def test_partial_retry_does_not_complete_unreturned_events(tmp_path):
+    stream = PersistentEventStream(tmp_path / "events.db")
+    try:
+        stream.publish({"agent": "A"})
+        stream.publish({"agent": "B"})
+        original_batch = stream.consume_batch(2)
+        original_batch_id = stream.batch_id_for(original_batch)
+        stream.restore_batch(original_batch)
+        retry_a = stream.consume_batch(1)
+        assert retry_a == [{"agent": "A"}]
+        assert stream.batch_id_for(retry_a) == original_batch_id
+        stream.acknowledge_batch(retry_a)
+        # Event B was not returned or acknowledged.
+        assert stream.size() == 1
+        retry_b = stream.consume_batch(1)
+        assert retry_b == [{"agent": "B"}]
+        assert stream.batch_id_for(retry_b) != original_batch_id
+        stream.acknowledge_batch(retry_b)
+        assert stream.size() == 0
+    finally:
+        stream.close()

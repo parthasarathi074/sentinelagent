@@ -119,6 +119,42 @@ class TestRuntimeReplacementManager(unittest.TestCase):
             replacement.runtime_agent_id,
         )
 
+    def test_replacement_is_idempotent_after_manager_recreation(self) -> None:
+        old_runtime = self._register_quarantined_runtime()
+
+        first = self.manager.replace(old_runtime.runtime_agent_id)
+
+        new_manager = RuntimeReplacementManager(self.registry)
+        second = new_manager.replace(old_runtime.runtime_agent_id)
+
+        self.assertEqual(first, second)
+        self.assertEqual(
+            len(self.registry.all_agents()),
+            2,
+        )
+
+    def test_rejects_replacement_of_active_runtime(self) -> None:
+        runtime = AgentRecord(
+            logical_agent_id="validator-02",
+            runtime_agent_id="runtime-validator-002",
+            role="validator",
+            version="1.0",
+            permissions=["read", "validate"],
+            allowed_targets=["runtime-target-001"],
+            status=AgentStatus.ACTIVE,
+            credentials_reference="credentials-active",
+        )
+        self.registry.register(runtime)
+
+        with self.assertRaisesRegex(ValueError, "must be quarantined"):
+            self.manager.replace(runtime.runtime_agent_id)
+
+        self.assertEqual(
+            self.registry.get(runtime.runtime_agent_id).status,
+            AgentStatus.ACTIVE,
+        )
+        self.assertEqual(len(self.registry.all_agents()), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

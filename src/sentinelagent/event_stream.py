@@ -1,5 +1,6 @@
 from collections import deque
 import time
+import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -9,7 +10,7 @@ class EventStream:
     Simple in-memory event stream used by SentinelAgent during development.
 
     Preserves event arrival timestamps and publication order when consumed
-    batches are restored.
+    batches are restored, including each batch's identifier.
     """
 
     def __init__(self, clock: Callable[[], float] | None = None) -> None:
@@ -20,8 +21,9 @@ class EventStream:
         self._next_sequence_number = 0
         self._next_front_sequence_number = -1
         self._consumed_batches: dict[
-            int, tuple[list[Any], list[float], list[int]]
+            int, tuple[list[Any], list[float], list[int], str]
         ] = {}
+        self._restored_batch_ids: dict[tuple[int, ...], str] = {}
 
     def set_clock(self, clock: Callable[[], float]) -> None:
         """Set the clock used to timestamp newly published events."""
@@ -44,6 +46,21 @@ class EventStream:
             return None
         return self._arrival_times[0]
 
+    def acknowledge_batch(self, batch: list[Any]) -> None:
+        """Discard restoration metadata after a batch succeeds."""
+        saved_batch = self._consumed_batches.get(id(batch))
+        if saved_batch is not None and saved_batch[0] is batch:
+            self._consumed_batches.pop(id(batch), None)
+
+    def batch_id_for(self, batch: list[Any]) -> str:
+        """Return the stable identifier assigned to a consumed batch."""
+        saved_batch = self._consumed_batches.get(id(batch))
+        if saved_batch is None or saved_batch[0] is not batch:
+            raise ValueError(
+                "Cannot identify a batch not consumed by this stream"
+            )
+        return saved_batch[3]
+
     def consume_batch(self, max_events: int) -> list[Any]:
         """Remove and return up to max_events in publication order."""
         if isinstance(max_events, bool) or not isinstance(max_events, int):
@@ -62,10 +79,18 @@ class EventStream:
             sequence_numbers.append(self._sequence_numbers.popleft())
 
         if batch:
+            sequence_key = tuple(sequence_numbers)
+            batch_id = self._restored_batch_ids.pop(
+                sequence_key,
+                None,
+            )
+            if batch_id is None:
+                batch_id = str(uuid.uuid4())
             self._consumed_batches[id(batch)] = (
                 batch,
                 arrival_times,
                 sequence_numbers,
+                batch_id,
             )
 
         return batch
@@ -80,6 +105,7 @@ class EventStream:
         if saved_batch is not None and saved_batch[0] is batch:
             arrival_times = saved_batch[1]
             sequence_numbers = saved_batch[2]
+            batch_id = saved_batch[3]
         else:
             arrival_times = [self._clock()] * len(batch)
             first_sequence = (
@@ -89,6 +115,9 @@ class EventStream:
                 range(first_sequence, self._next_front_sequence_number + 1)
             )
             self._next_front_sequence_number -= len(batch)
+            batch_id = str(uuid.uuid4())
+
+        self._restored_batch_ids[tuple(sequence_numbers)] = batch_id
 
         restored_items = list(zip(batch, arrival_times, sequence_numbers))
         existing_items = list(

@@ -43,6 +43,20 @@ class TestMicroBatchProcessor(unittest.TestCase):
         )
         self.assertEqual(len(processed_batches), 1)
 
+    def test_successful_in_memory_batch_releases_restore_metadata(self):
+        stream = EventStream()
+        event = {"event_id": "event-1"}
+        stream.publish(event)
+
+        processor = MicroBatchProcessor(
+            event_stream=stream,
+            batch_size=1,
+            batch_handler=lambda batch: None,
+        )
+
+        self.assertEqual(processor.process_once(), [event])
+        self.assertEqual(stream._consumed_batches, {})
+
     def test_waits_when_batch_is_not_full(self):
         stream = EventStream()
         processed_batches = []
@@ -242,6 +256,73 @@ class TestMicroBatchProcessor(unittest.TestCase):
         )
         self.assertEqual(len(attempts), 2)
         self.assertEqual(stream.size(), 0)
+
+    def test_retry_callback_counts_events_when_retry_is_attempted(self):
+        stream = EventStream()
+        attempts = []
+        retried_event_counts = []
+
+        def handler(batch):
+            attempts.append(batch)
+            if len(attempts) == 1:
+                raise RuntimeError("simulated analysis failure")
+
+        processor = MicroBatchProcessor(
+            event_stream=stream,
+            batch_size=2,
+            batch_handler=handler,
+            on_retry=retried_event_counts.append,
+        )
+
+        stream.publish({"event_id": "event-1"})
+        stream.publish({"event_id": "event-2"})
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "simulated analysis failure",
+        ):
+            processor.process_once()
+
+        self.assertEqual(retried_event_counts, [])
+        self.assertEqual(stream.size(), 2)
+
+        result = processor.process_once()
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(retried_event_counts, [2])
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(stream.size(), 0)
+
+    def test_id_handler_reuses_batch_id_when_batch_is_retried(self):
+        stream = EventStream()
+        attempts = []
+        legacy_calls = []
+
+        def handler_with_id(batch, batch_id):
+            attempts.append(batch_id)
+            if len(attempts) == 1:
+                raise RuntimeError("simulated analysis failure")
+
+        processor = MicroBatchProcessor(
+            event_stream=stream,
+            batch_size=1,
+            batch_handler=legacy_calls.append,
+            batch_handler_with_id=handler_with_id,
+        )
+        stream.publish({"event_id": "event-1"})
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "simulated analysis failure",
+        ):
+            processor.process_once()
+
+        processor.process_once()
+
+        self.assertEqual(len(attempts), 2)
+        self.assertTrue(attempts[0])
+        self.assertEqual(attempts[0], attempts[1])
+        self.assertEqual(legacy_calls, [])
 
     def test_timeout_starts_when_event_arrives(self):
         clock = FakeClock()

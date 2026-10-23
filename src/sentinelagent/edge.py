@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable
 
 from .models import EdgeDecision, EdgeRequest, EdgeResult
 from .registry import AgentRegistry
+
+
+logger = logging.getLogger(__name__)
 
 
 class SentinelEdge:
@@ -202,12 +206,12 @@ class SentinelEdge:
             "trace_id": request.trace_id,
             "source_agent": {
                 "logical_id": source.logical_agent_id if source else None,
-                "runtime_id": source.runtime_agent_id if source else None,
+                "runtime_id": request.source_runtime_id,
                 "status": source.status.value if source else None,
             },
             "target_agent": {
                 "logical_id": target.logical_agent_id if target else None,
-                "runtime_id": target.runtime_agent_id if target else None,
+                "runtime_id": request.target_runtime_id,
                 "status": target.status.value if target else None,
             },
             "action": request.action,
@@ -219,5 +223,46 @@ class SentinelEdge:
         }
 
     def _publish(self, event: dict[str, Any]) -> None:
+        source_agent = event.get("source_agent")
+        target_agent = event.get("target_agent")
+        source_runtime_id = (
+            source_agent.get("runtime_id")
+            if isinstance(source_agent, dict)
+            else None
+        )
+        target_runtime_id = (
+            target_agent.get("runtime_id")
+            if isinstance(target_agent, dict)
+            else None
+        )
+
+        logger.info(
+            (
+                "sentinel_edge_decision request_id=%r trace_id=%r edge_id=%r "
+                "source_runtime_id=%r target_runtime_id=%r decision=%r "
+                "reason=%r"
+            ),
+            event.get("request_id"),
+            event.get("trace_id"),
+            event.get("edge_id"),
+            source_runtime_id,
+            target_runtime_id,
+            event.get("decision"),
+            event.get("decision_reason"),
+        )
+
         if self.event_sink is not None:
-            self.event_sink(event)
+            try:
+                self.event_sink(event)
+            except Exception as exc:
+                logger.error(
+                    (
+                        "sentinel_edge_event_publish_failed request_id=%r "
+                        "trace_id=%r edge_id=%r error_type=%s"
+                    ),
+                    event.get("request_id"),
+                    event.get("trace_id"),
+                    event.get("edge_id"),
+                    type(exc).__name__,
+                )
+                raise

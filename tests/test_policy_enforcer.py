@@ -139,5 +139,46 @@ class TestPolicyEnforcer(unittest.TestCase):
         self.assertEqual(len(applied), 3)
 
 
+    def test_unknown_runtime_decision_is_skipped_without_registry_mutation(self) -> None:
+        decisions = {
+            "runtime-unknown": PolicyDecision(
+                runtime_agent_id="runtime-unknown",
+                risk_score=20,
+                risk_level="MEDIUM",
+                action=PolicyAction.MARK_SUSPICIOUS,
+                reasons=("REPEATED_TARGET_INTERACTIONS",),
+            )
+        }
+
+        applied = self.enforcer.enforce(decisions)
+
+        self.assertEqual(
+            applied["runtime-unknown"],
+            "SKIPPED_UNKNOWN_RUNTIME",
+        )
+        self.assertEqual(self.registry.all_agents(), [])
+
+    def test_medium_risk_does_not_downgrade_quarantined_runtime(self) -> None:
+        self._register_runtime("runtime-A")
+        self.registry.quarantine("runtime-A")
+        decisions = {
+            "runtime-A": PolicyDecision(
+                runtime_agent_id="runtime-A",
+                risk_score=20,
+                risk_level="MEDIUM",
+                action=PolicyAction.MARK_SUSPICIOUS,
+                reasons=("REPEATED_TARGET_INTERACTIONS",),
+            )
+        }
+
+        applied = self.enforcer.enforce(decisions)
+
+        self.assertEqual(applied["runtime-A"], "ALREADY_QUARANTINED")
+        self.assertEqual(
+            self.registry.get("runtime-A").status,
+            AgentStatus.QUARANTINED,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -39,14 +39,25 @@ class PolicyEnforcer:
                 applied[runtime_agent_id] = PolicyAction.MONITOR.value
                 continue
 
+            try:
+                runtime = self.registry.get(runtime_agent_id)
+            except KeyError:
+                # Keep the risk decision as evidence, but never try to mutate
+                # a runtime that is not registered in the authoritative registry.
+                applied[runtime_agent_id] = "SKIPPED_UNKNOWN_RUNTIME"
+                continue
+
             if decision.action == PolicyAction.MARK_SUSPICIOUS:
-                self.registry.mark_suspicious(runtime_agent_id)
-                applied[runtime_agent_id] = PolicyAction.MARK_SUSPICIOUS.value
+                if runtime.status == AgentStatus.QUARANTINED:
+                    # Quarantine is a stronger terminal containment state;
+                    # repeated denied attempts must not downgrade it.
+                    applied[runtime_agent_id] = "ALREADY_QUARANTINED"
+                else:
+                    self.registry.mark_suspicious(runtime_agent_id)
+                    applied[runtime_agent_id] = PolicyAction.MARK_SUSPICIOUS.value
                 continue
 
             if decision.action == PolicyAction.QUARANTINE:
-                runtime = self.registry.get(runtime_agent_id)
-
                 if runtime.status != AgentStatus.QUARANTINED:
                     self.registry.quarantine(runtime_agent_id)
 

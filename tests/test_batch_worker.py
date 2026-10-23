@@ -153,6 +153,79 @@ class TestBatchWorker(unittest.TestCase):
         self.assertEqual(processed_batches, [expected_batch])
         self.assertEqual(stream.size(), 0)
 
+    def test_edge_event_reaches_analysis_through_micro_batch(self):
+        from sentinelagent.edge import SentinelEdge
+        from sentinelagent.event_stream import EventStream
+        from sentinelagent.micro_batch import MicroBatchProcessor
+        from sentinelagent.models import AgentRecord, EdgeDecision, EdgeRequest
+        from sentinelagent.registry import AgentRegistry
+
+        registry = AgentRegistry()
+        registry.register(
+            AgentRecord(
+                logical_agent_id="agent-A",
+                runtime_agent_id="runtime-A-001",
+                role="ingest",
+                version="1.0",
+                permissions={"message:send"},
+                allowed_targets={"agent-B"},
+            )
+        )
+        registry.register(
+            AgentRecord(
+                logical_agent_id="agent-B",
+                runtime_agent_id="runtime-B-001",
+                role="validator",
+                version="1.0",
+                permissions={"validation:execute"},
+                allowed_targets={"agent-A"},
+            )
+        )
+        registry.activate("runtime-A-001")
+        registry.activate("runtime-B-001")
+
+        stream = EventStream()
+        engine = AnalysisEngine()
+        analysis_results = []
+        worker = BatchWorker(
+            batch_handler=lambda batch: analysis_results.append(
+                engine.analyze(batch)
+            )
+        )
+        processor = MicroBatchProcessor(
+            event_stream=stream,
+            batch_size=1,
+            batch_handler=worker.process,
+        )
+        edge = SentinelEdge(registry=registry, event_sink=stream.publish)
+        request = EdgeRequest(
+            request_id="request-e2e-001",
+            trace_id="trace-e2e-001",
+            edge_id="edge-agent-A-agent-B",
+            source_runtime_id="runtime-A-001",
+            target_runtime_id="runtime-B-001",
+            action="SEND_MESSAGE",
+            requested_permission="message:send",
+        )
+
+        edge_result = edge.handle(request)
+        processed_batch = processor.process_once()
+
+        self.assertEqual(edge_result.decision, EdgeDecision.ALLOW)
+        self.assertEqual(len(processed_batch), 1)
+        self.assertEqual(stream.size(), 0)
+        self.assertEqual(len(analysis_results), 1)
+        self.assertEqual(analysis_results[0]["event_count"], 1)
+        self.assertEqual(analysis_results[0]["invalid_events"], 0)
+        self.assertEqual(
+            analysis_results[0]["events_by_source_runtime"],
+            {"runtime-A-001": 1},
+        )
+        self.assertEqual(
+            analysis_results[0]["runtime_target_interactions"],
+            {"runtime-A-001": {"runtime-B-001": 1}},
+        )
+
     def test_pipeline_accumulates_analysis_across_batches(self):
         engine = AnalysisEngine()
         cross_batch = CrossBatchAnalyzer()
@@ -485,6 +558,53 @@ class TestBatchWorker(unittest.TestCase):
 
         self.assertEqual(pipeline.snapshot(), first_snapshot)
 
+    def test_pipeline_retry_after_policy_failure_does_not_double_count(self):
+        pipeline = AnalysisPipeline()
+        batch = [
+            {
+                "event_id": "event-policy-retry",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+            }
+        ]
+
+        original_evaluate = pipeline.policy_engine.evaluate_analysis
+        attempts = 0
+
+        def fail_once(analysis_result):
+            nonlocal attempts
+            attempts += 1
+
+            if attempts == 1:
+                raise RuntimeError("simulated policy failure")
+
+            return original_evaluate(analysis_result)
+
+        pipeline.policy_engine.evaluate_analysis = fail_once
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "simulated policy failure",
+        ):
+            pipeline.process(batch, batch_id="batch-policy-retry")
+
+        failed_snapshot = pipeline.snapshot()
+        self.assertEqual(failed_snapshot["batches_processed"], 1)
+        self.assertEqual(
+            failed_snapshot["runtime_target_interactions"],
+            {"runtime-A": {"runtime-B": 1}},
+        )
+
+        pipeline.process(batch, batch_id="batch-policy-retry")
+        successful_snapshot = pipeline.snapshot()
+
+        self.assertEqual(successful_snapshot["batches_processed"], 1)
+        self.assertEqual(
+            successful_snapshot["runtime_target_interactions"],
+            {"runtime-A": {"runtime-B": 1}},
+        )
+        self.assertEqual(attempts, 2)
+
     def test_pipeline_retry_after_accumulation_failure_is_idempotent(self):
         pipeline = AnalysisPipeline()
 
@@ -730,6 +850,29 @@ class TestBatchWorker(unittest.TestCase):
         )
         self.assertEqual(second_snapshot, first_snapshot)
 
+    def test_pipeline_logs_policy_decision_with_batch_and_runtime_ids(self):
+        pipeline = AnalysisPipeline()
+        batch = [
+            {
+                "event_id": "observability-event-1",
+                "source_runtime_id": "runtime-observed-A",
+                "target_runtime_id": "runtime-observed-B",
+            }
+        ]
+
+        with self.assertLogs(
+            "sentinelagent.analysis_pipeline",
+            level=logging.INFO,
+        ) as captured:
+            pipeline.process(batch, batch_id="observability-batch-1")
+
+        message = "\n".join(captured.output)
+        self.assertIn("sentinel_policy_decision", message)
+        self.assertIn("observability-batch-1", message)
+        self.assertIn("runtime-observed-A", message)
+        self.assertIn("risk_level=LOW", message)
+        self.assertIn("action=MONITOR", message)
+
     def test_pipeline_policy_decisions_are_json_safe(self):
         import json
 
@@ -866,6 +1009,276 @@ class TestBatchWorker(unittest.TestCase):
             registry.get("runtime-a").status,
             AgentStatus.SUSPICIOUS,
         )
+
+
+    def test_pipeline_policy_uses_cumulative_cross_batch_risk(self):
+        from sentinelagent.models import AgentRecord, AgentStatus
+        from sentinelagent.registry import AgentRegistry
+
+        registry = AgentRegistry()
+        registry.register(
+            AgentRecord(
+                logical_agent_id="agent-A",
+                runtime_agent_id="runtime-A",
+                role="worker",
+                version="1.0",
+                permissions={"message:send"},
+                allowed_targets={"agent-B"},
+            )
+        )
+        registry.register(
+            AgentRecord(
+                logical_agent_id="agent-B",
+                runtime_agent_id="runtime-B",
+                role="worker",
+                version="1.0",
+                permissions={"message:receive"},
+                allowed_targets={"agent-A"},
+            )
+        )
+        registry.activate("runtime-A")
+        registry.activate("runtime-B")
+
+        pipeline = AnalysisPipeline(registry=registry)
+        first_batch = [
+            {
+                "event_id": "cross-batch-policy-1",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+            }
+        ]
+        second_batch = [
+            {
+                "event_id": "cross-batch-policy-2",
+                "source_runtime_id": "runtime-A",
+                "target_runtime_id": "runtime-B",
+            }
+        ]
+
+        first_result = pipeline.process(
+            first_batch,
+            batch_id="cross-batch-policy-batch-1",
+        )
+        self.assertEqual(
+            first_result["policy_decisions_json"]["runtime-A"]["action"],
+            "MONITOR",
+        )
+        self.assertEqual(
+            registry.get("runtime-A").status,
+            AgentStatus.ACTIVE,
+        )
+
+        second_result = pipeline.process(
+            second_batch,
+            batch_id="cross-batch-policy-batch-2",
+        )
+
+        self.assertEqual(
+            second_result["cross_batch_risk_assessments"]["runtime-A"][
+                "risk_level"
+            ],
+            "MEDIUM",
+        )
+        self.assertEqual(
+            second_result["policy_decisions_json"]["runtime-A"]["action"],
+            "MARK_SUSPICIOUS",
+        )
+        self.assertEqual(
+            registry.get("runtime-A").status,
+            AgentStatus.SUSPICIOUS,
+        )
+
+    def test_analysis_pipeline_routes_edge_events_through_stream(self):
+        from sentinelagent.models import (
+            AgentRecord,
+            EdgeDecision,
+            EdgeRequest,
+        )
+        from sentinelagent.registry import AgentRegistry
+
+        registry = AgentRegistry()
+        registry.register(
+            AgentRecord(
+                logical_agent_id="agent-A",
+                runtime_agent_id="runtime-A-001",
+                role="ingest",
+                version="1.0",
+                permissions={"message:send"},
+                allowed_targets={"agent-B"},
+            )
+        )
+        registry.register(
+            AgentRecord(
+                logical_agent_id="agent-B",
+                runtime_agent_id="runtime-B-001",
+                role="validator",
+                version="1.0",
+                permissions={"validation:execute"},
+                allowed_targets={"agent-A"},
+            )
+        )
+        registry.activate("runtime-A-001")
+        registry.activate("runtime-B-001")
+
+        pipeline = AnalysisPipeline(registry=registry, batch_size=1)
+        request = EdgeRequest(
+            request_id="request-pipeline-001",
+            trace_id="trace-pipeline-001",
+            edge_id="edge-agent-A-agent-B",
+            source_runtime_id="runtime-A-001",
+            target_runtime_id="runtime-B-001",
+            action="SEND_MESSAGE",
+            requested_permission="message:send",
+        )
+
+        edge_result = pipeline.handle_edge_request(request)
+        self.assertEqual(edge_result.decision, EdgeDecision.ALLOW)
+        self.assertEqual(pipeline.event_stream.size(), 1)
+
+        analysis_result = pipeline.process_pending_events()
+
+        self.assertIsNotNone(analysis_result)
+        self.assertEqual(analysis_result["event_count"], 1)
+        self.assertEqual(analysis_result["invalid_events"], 0)
+        self.assertEqual(
+            analysis_result["events_by_source_runtime"],
+            {"runtime-A-001": 1},
+        )
+        self.assertEqual(
+            analysis_result["runtime_target_interactions"],
+            {"runtime-A-001": {"runtime-B-001": 1}},
+        )
+        self.assertEqual(pipeline.event_stream.size(), 0)
+
+    def test_analysis_pipeline_routes_denied_edge_events_through_stream(self):
+        from sentinelagent.models import (
+            AgentRecord,
+            AgentStatus,
+            EdgeDecision,
+            EdgeRequest,
+        )
+        from sentinelagent.registry import AgentRegistry
+
+        registry = AgentRegistry()
+        registry.register(
+            AgentRecord(
+                logical_agent_id="agent-A",
+                runtime_agent_id="runtime-A-denied",
+                role="ingest",
+                version="1.0",
+                permissions={"message:read"},
+                allowed_targets={"agent-B"},
+            )
+        )
+        registry.register(
+            AgentRecord(
+                logical_agent_id="agent-B",
+                runtime_agent_id="runtime-B-denied",
+                role="validator",
+                version="1.0",
+                permissions={"validation:execute"},
+                allowed_targets={"agent-A"},
+            )
+        )
+        registry.activate("runtime-A-denied")
+        registry.activate("runtime-B-denied")
+
+        pipeline = AnalysisPipeline(registry=registry, batch_size=1)
+        request = EdgeRequest(
+            request_id="request-pipeline-denied-001",
+            trace_id="trace-pipeline-denied-001",
+            edge_id="edge-agent-A-agent-B-denied",
+            source_runtime_id="runtime-A-denied",
+            target_runtime_id="runtime-B-denied",
+            action="SEND_MESSAGE",
+            requested_permission="message:send",
+        )
+
+        edge_result = pipeline.handle_edge_request(request)
+
+        self.assertEqual(edge_result.decision, EdgeDecision.DENY)
+        self.assertEqual(pipeline.event_stream.size(), 1)
+
+        analysis_result = pipeline.process_pending_events()
+
+        self.assertIsNotNone(analysis_result)
+        self.assertEqual(analysis_result["event_count"], 1)
+        self.assertEqual(analysis_result["invalid_events"], 0)
+        self.assertEqual(
+            analysis_result["events_by_source_runtime"],
+            {"runtime-A-denied": 1},
+        )
+        self.assertEqual(
+            analysis_result["runtime_target_interactions"],
+            {"runtime-A-denied": {"runtime-B-denied": 1}},
+        )
+        self.assertEqual(
+            registry.get("runtime-A-denied").status,
+            AgentStatus.ACTIVE,
+        )
+        self.assertEqual(
+            registry.get("runtime-B-denied").status,
+            AgentStatus.ACTIVE,
+        )
+        self.assertEqual(pipeline.event_stream.size(), 0)
+
+
+    def test_repeated_denied_unknown_runtime_does_not_break_batch_processing(self):
+        from sentinelagent.models import AgentRecord, AgentStatus
+        from sentinelagent.registry import AgentRegistry
+
+        registry = AgentRegistry()
+        registry.register(
+            AgentRecord(
+                logical_agent_id="agent-B",
+                runtime_agent_id="runtime-B",
+                role="validator",
+                version="1.0",
+                permissions={"message:receive"},
+                allowed_targets=set(),
+                status=AgentStatus.ACTIVE,
+            )
+        )
+        pipeline = AnalysisPipeline(registry=registry)
+
+        first_event = {
+            "event_id": "unknown-denied-1",
+            "decision": "DENY",
+            "source_agent": {
+                "logical_id": None,
+                "runtime_id": "runtime-unknown",
+                "status": None,
+            },
+            "target_agent": {
+                "logical_id": "agent-B",
+                "runtime_id": "runtime-B",
+                "status": "ACTIVE",
+            },
+            "action": "SEND_MESSAGE",
+            "requested_permission": "message:send",
+        }
+        second_event = {
+            **first_event,
+            "event_id": "unknown-denied-2",
+        }
+
+        first_result = pipeline.process(
+            [first_event], batch_id="unknown-denied-batch-1"
+        )
+        second_result = pipeline.process(
+            [second_event], batch_id="unknown-denied-batch-2"
+        )
+
+        self.assertEqual(
+            second_result["policy_decisions_json"]["runtime-unknown"]["action"],
+            "MARK_SUSPICIOUS",
+        )
+        self.assertEqual(
+            second_result["enforced_actions"]["runtime-unknown"],
+            "SKIPPED_UNKNOWN_RUNTIME",
+        )
+        self.assertEqual(registry.get("runtime-B").status, AgentStatus.ACTIVE)
+        self.assertIn("runtime-unknown", first_result["policy_decisions_json"])
 
 
 if __name__ == "__main__":

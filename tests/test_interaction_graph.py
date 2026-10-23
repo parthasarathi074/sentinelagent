@@ -103,6 +103,34 @@ class TestInteractionGraph(unittest.TestCase):
             ],
         )
 
+    def test_identifies_group_of_three_repeatedly_contacting_shared_target(self):
+        graph = InteractionGraph(
+            {
+                "runtime-A": {"runtime-T": 2},
+                "runtime-B": {"runtime-T": 3},
+                "runtime-C": {"runtime-T": 4},
+            }
+        )
+        groups = graph.group_coordination()
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(
+            groups[0]["member_runtime_ids"],
+            ["runtime-A", "runtime-B", "runtime-C"],
+        )
+        self.assertEqual(
+            groups[0]["shared_target_runtime_id"],
+            "runtime-T",
+        )
+        self.assertEqual(
+            groups[0]["interaction_counts"],
+            {
+                "runtime-A": 2,
+                "runtime-B": 3,
+                "runtime-C": 4,
+            },
+        )
+
     def test_single_interaction_does_not_create_coordination_evidence(self):
         graph = InteractionGraph(
             {
