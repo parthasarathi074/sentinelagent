@@ -73,7 +73,11 @@ class TestBatchWorker(unittest.TestCase):
         def analysis_handler(batch, batch_id=None):
             return "analysis-complete"
 
-        worker = BatchWorker(batch_handler=analysis_handler)
+        durations = []
+        worker = BatchWorker(
+            batch_handler=analysis_handler,
+            on_duration=durations.append,
+        )
 
         with self.assertLogs(
             "sentinelagent.batch_worker",
@@ -94,12 +98,18 @@ class TestBatchWorker(unittest.TestCase):
         self.assertTrue(
             any("status=success" in message for message in captured.output)
         )
+        self.assertEqual(len(durations), 1)
+        self.assertGreaterEqual(durations[0], 0)
 
     def test_failed_batch_emits_error_log_and_reraises(self):
         def failing_handler(batch, batch_id=None):
             raise RuntimeError("simulated failure")
 
-        worker = BatchWorker(batch_handler=failing_handler)
+        durations = []
+        worker = BatchWorker(
+            batch_handler=failing_handler,
+            on_duration=durations.append,
+        )
 
         with self.assertLogs(
             "sentinelagent.batch_worker",
@@ -120,6 +130,8 @@ class TestBatchWorker(unittest.TestCase):
         self.assertTrue(
             any("status=failure" in message for message in captured.output)
         )
+        self.assertEqual(len(durations), 1)
+        self.assertGreaterEqual(durations[0], 0)
 
     def test_micro_batch_reaches_batch_worker_and_analysis_handler(self):
         from sentinelagent.event_stream import EventStream

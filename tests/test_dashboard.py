@@ -6,7 +6,19 @@ from sentinelagent.dashboard import create_server
 
 
 def test_dashboard_health_and_snapshot_endpoints():
-    server = create_server(lambda: {"metrics": {"processed": 4}, "risk_state": "NORMAL"}, port=0)
+    server = create_server(
+        lambda: {
+            "metrics": {
+                "processed": 4,
+                "failed": 0,
+                "retried": 0,
+                "quarantined": 0,
+                "last_batch_duration_seconds": 0.125,
+            },
+            "risk_state": "NORMAL",
+        },
+        port=0,
+    )
     try:
         server_thread = __import__("threading").Thread(target=server.serve_forever, daemon=True)
         server_thread.start()
@@ -16,7 +28,9 @@ def test_dashboard_health_and_snapshot_endpoints():
         with urlopen(base + "/") as response:
             assert "SentinelAgent" in response.read().decode("utf-8")
         with urlopen(base + "/api/metrics") as response:
-            assert json.load(response)["metrics"]["processed"] == 4
+            metrics = json.load(response)["metrics"]
+            assert metrics["processed"] == 4
+            assert metrics["last_batch_duration_seconds"] == 0.125
         with urlopen(base + "/api/security") as response:
             assert json.load(response)["risk_state"] == "NORMAL"
         try:

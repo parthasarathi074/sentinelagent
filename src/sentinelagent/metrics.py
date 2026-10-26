@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import isfinite
 from threading import Lock
 
 
@@ -12,24 +13,29 @@ class MetricsSnapshot:
     failed: int = 0
     retried: int = 0
     quarantined: int = 0
+    last_batch_duration_seconds: float | None = None
 
-    def to_dict(self) -> dict[str, int]:
+    def to_dict(self) -> dict[str, int | float | None]:
         return {
             "processed": self.processed,
             "failed": self.failed,
             "retried": self.retried,
             "quarantined": self.quarantined,
+            "last_batch_duration_seconds": self.last_batch_duration_seconds,
         }
 
 
 @dataclass
 class Metrics:
-    """Thread-safe counters for SentinelAgent observability."""
+    """Thread-safe counters and duration tracking for observability."""
 
     _processed: int = field(default=0, init=False, repr=False)
     _failed: int = field(default=0, init=False, repr=False)
     _retried: int = field(default=0, init=False, repr=False)
     _quarantined: int = field(default=0, init=False, repr=False)
+    _last_batch_duration_seconds: float | None = field(
+        default=None, init=False, repr=False
+    )
     _lock: Lock = field(default_factory=Lock, init=False, repr=False)
 
     def record_processed(self, count: int = 1) -> None:
@@ -44,6 +50,20 @@ class Metrics:
     def record_quarantined(self, count: int = 1) -> None:
         self._increment("_quarantined", count)
 
+    def record_batch_duration(self, duration_seconds: float) -> None:
+        if (
+            isinstance(duration_seconds, bool)
+            or not isinstance(duration_seconds, (int, float))
+            or not isfinite(duration_seconds)
+            or duration_seconds < 0
+        ):
+            raise ValueError(
+                "duration_seconds must be a finite, non-negative number"
+            )
+
+        with self._lock:
+            self._last_batch_duration_seconds = float(duration_seconds)
+
     def snapshot(self) -> MetricsSnapshot:
         with self._lock:
             return MetricsSnapshot(
@@ -51,6 +71,9 @@ class Metrics:
                 failed=self._failed,
                 retried=self._retried,
                 quarantined=self._quarantined,
+                last_batch_duration_seconds=(
+                    self._last_batch_duration_seconds
+                ),
             )
 
     def reset(self) -> None:
@@ -59,6 +82,7 @@ class Metrics:
             self._failed = 0
             self._retried = 0
             self._quarantined = 0
+            self._last_batch_duration_seconds = None
 
     def _increment(self, counter_name: str, count: int) -> None:
         if isinstance(count, bool) or not isinstance(count, int) or count < 0:

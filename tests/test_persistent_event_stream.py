@@ -259,6 +259,41 @@ def test_acknowledgement_failure_is_reported(tmp_path):
         stream.close()
 
 
+def test_partial_retry_survives_restart_without_losing_events(tmp_path):
+    database_path = tmp_path / "events.db"
+    stream = PersistentEventStream(database_path)
+    try:
+        stream.publish({"agent": "A"})
+        stream.publish({"agent": "B"})
+        original_batch = stream.consume_batch(2)
+        original_batch_id = stream.batch_id_for(original_batch)
+        stream.restore_batch(original_batch)
+        retry_a = stream.consume_batch(1)
+        assert retry_a == [{"agent": "A"}]
+        assert stream.batch_id_for(retry_a) == original_batch_id
+        # Simulate a crash before acknowledging the partial retry.
+        stream.close()
+        recovered_stream = PersistentEventStream(database_path)
+        try:
+            assert recovered_stream.size() == 2
+            recovered_batch = recovered_stream.consume_batch(1)
+            assert recovered_batch == [{"agent": "A"}]
+            assert (
+                recovered_stream.batch_id_for(recovered_batch)
+                == original_batch_id
+            )
+            recovered_stream.acknowledge_batch(recovered_batch)
+            remaining_batch = recovered_stream.consume_batch(1)
+            assert remaining_batch == [{"agent": "B"}]
+            recovered_stream.acknowledge_batch(remaining_batch)
+            assert recovered_stream.size() == 0
+        finally:
+            recovered_stream.close()
+    finally:
+        if stream._connection is not None:
+            stream.close()
+
+
 def test_incompatible_legacy_schema_is_rejected_without_data_loss(tmp_path):
     database_path = tmp_path / "legacy.db"
 

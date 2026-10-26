@@ -1,3 +1,4 @@
+import math
 import time
 import uuid
 from collections.abc import Callable
@@ -29,11 +30,22 @@ class MicroBatchProcessor:
         on_retry: Callable[[int], None] | None = None,
         batch_handler_with_id: Callable[[list[Any], str], None] | None = None,
     ) -> None:
-        if batch_size <= 0:
-            raise ValueError("batch_size must be greater than zero")
+        if (
+            isinstance(batch_size, bool)
+            or not isinstance(batch_size, int)
+            or batch_size <= 0
+        ):
+            raise ValueError("batch_size must be a positive integer")
 
-        if max_wait_seconds <= 0:
-            raise ValueError("max_wait_seconds must be greater than zero")
+        if (
+            isinstance(max_wait_seconds, bool)
+            or not isinstance(max_wait_seconds, (int, float))
+            or not math.isfinite(max_wait_seconds)
+            or max_wait_seconds <= 0
+        ):
+            raise ValueError(
+                "max_wait_seconds must be a finite number greater than zero"
+            )
 
         self.event_stream = event_stream
         self.batch_size = batch_size

@@ -23,12 +23,18 @@ def test_pipeline_metrics_count_successfully_processed_events() -> None:
 
     metrics = pipeline.metrics.snapshot().to_dict()
 
-    assert metrics == {
+    assert {
+        key: value
+        for key, value in metrics.items()
+        if key != "last_batch_duration_seconds"
+    } == {
         "processed": 2,
         "failed": 0,
         "retried": 0,
         "quarantined": 0,
     }
+    assert metrics["last_batch_duration_seconds"] is not None
+    assert metrics["last_batch_duration_seconds"] >= 0
 
 
 def test_pipeline_metrics_count_failed_processing_attempt() -> None:
@@ -56,12 +62,18 @@ def test_pipeline_metrics_count_failed_processing_attempt() -> None:
 
     metrics = pipeline.metrics.snapshot().to_dict()
 
-    assert metrics == {
+    assert {
+        key: value
+        for key, value in metrics.items()
+        if key != "last_batch_duration_seconds"
+    } == {
         "processed": 0,
         "failed": 1,
         "retried": 0,
         "quarantined": 0,
     }
+    assert metrics["last_batch_duration_seconds"] is not None
+    assert metrics["last_batch_duration_seconds"] >= 0
 
 
 def test_pipeline_metrics_count_duplicate_successful_calls() -> None:
@@ -80,12 +92,18 @@ def test_pipeline_metrics_count_duplicate_successful_calls() -> None:
 
     metrics = pipeline.metrics.snapshot().to_dict()
 
-    assert metrics == {
+    assert {
+        key: value
+        for key, value in metrics.items()
+        if key != "last_batch_duration_seconds"
+    } == {
         "processed": 2,
         "failed": 0,
         "retried": 0,
         "quarantined": 0,
     }
+    assert metrics["last_batch_duration_seconds"] is not None
+    assert metrics["last_batch_duration_seconds"] >= 0
 
     # Duplicate processing does not double-count accumulated evidence.
     assert pipeline.snapshot()["batches_processed"] == 1
@@ -140,12 +158,19 @@ def test_pipeline_metrics_count_events_when_micro_batch_is_retried() -> None:
     with pytest.raises(RuntimeError, match="simulated analysis failure"):
         pipeline.process_pending_events()
 
-    assert pipeline.metrics.snapshot().to_dict() == {
+    failed_metrics = pipeline.metrics.snapshot().to_dict()
+    assert {
+        key: value
+        for key, value in failed_metrics.items()
+        if key != "last_batch_duration_seconds"
+    } == {
         "processed": 0,
         "failed": 1,
         "retried": 0,
         "quarantined": 0,
     }
+    assert failed_metrics["last_batch_duration_seconds"] is not None
+    assert failed_metrics["last_batch_duration_seconds"] >= 0
 
     result = pipeline.process_pending_events()
 
@@ -155,9 +180,16 @@ def test_pipeline_metrics_count_events_when_micro_batch_is_retried() -> None:
     assert received_batch_ids[0]
     assert received_batch_ids[0] == received_batch_ids[1]
     assert analyzed_batch_ids == [received_batch_ids[1]]
-    assert pipeline.metrics.snapshot().to_dict() == {
+    retried_metrics = pipeline.metrics.snapshot().to_dict()
+    assert {
+        key: value
+        for key, value in retried_metrics.items()
+        if key != "last_batch_duration_seconds"
+    } == {
         "processed": 2,
         "failed": 1,
         "retried": 2,
         "quarantined": 0,
     }
+    assert retried_metrics["last_batch_duration_seconds"] is not None
+    assert retried_metrics["last_batch_duration_seconds"] >= 0

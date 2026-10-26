@@ -18,8 +18,10 @@ class BatchWorker:
     def __init__(
         self,
         batch_handler: Callable[[list[Any]], Any],
+        on_duration: Callable[[float], None] | None = None,
     ) -> None:
         self.batch_handler = batch_handler
+        self.on_duration = on_duration
 
     def process(
         self,
@@ -62,6 +64,9 @@ class BatchWorker:
         except Exception:
             duration_seconds = perf_counter() - started_at
 
+            if self.on_duration is not None:
+                self.on_duration(duration_seconds)
+
             logger.exception(
                 (
                     "batch_processing_finished batch_id=%s event_count=%d "
@@ -74,6 +79,9 @@ class BatchWorker:
             raise
 
         duration_seconds = perf_counter() - started_at
+
+        if self.on_duration is not None:
+            self.on_duration(duration_seconds)
 
         logger.info(
             (

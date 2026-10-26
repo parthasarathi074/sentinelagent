@@ -104,6 +104,29 @@ class TestMicroBatchProcessor(unittest.TestCase):
                 batch_handler=lambda batch: None,
             )
 
+    def test_batch_size_must_be_a_positive_integer(self):
+        stream = EventStream()
+        for invalid_size in (True, 1.5, "2", None):
+            with self.subTest(batch_size=invalid_size):
+                with self.assertRaises(ValueError):
+                    MicroBatchProcessor(
+                        event_stream=stream,
+                        batch_size=invalid_size,
+                        batch_handler=lambda batch: None,
+                    )
+
+    def test_max_wait_must_be_finite_and_positive(self):
+        stream = EventStream()
+        for invalid_wait in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(max_wait_seconds=invalid_wait):
+                with self.assertRaises(ValueError):
+                    MicroBatchProcessor(
+                        event_stream=stream,
+                        batch_size=1,
+                        max_wait_seconds=invalid_wait,
+                        batch_handler=lambda batch: None,
+                    )
+
     def test_partial_batch_waits_until_max_wait(self):
         clock = FakeClock()
         stream = EventStream(clock=clock)

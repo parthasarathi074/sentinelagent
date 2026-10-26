@@ -13,6 +13,7 @@ def test_metrics_start_at_zero() -> None:
         "failed": 0,
         "retried": 0,
         "quarantined": 0,
+        "last_batch_duration_seconds": None,
     }
 
 
@@ -29,6 +30,7 @@ def test_metrics_record_all_counter_types() -> None:
         "failed": 2,
         "retried": 3,
         "quarantined": 4,
+        "last_batch_duration_seconds": None,
     }
 
 
@@ -49,6 +51,7 @@ def test_metrics_reset_clears_all_counters() -> None:
     metrics.record_failed(2)
     metrics.record_retried(3)
     metrics.record_quarantined(1)
+    metrics.record_batch_duration(1.25)
 
     metrics.reset()
 
@@ -57,7 +60,32 @@ def test_metrics_reset_clears_all_counters() -> None:
         "failed": 0,
         "retried": 0,
         "quarantined": 0,
+        "last_batch_duration_seconds": None,
     }
+
+
+def test_metrics_record_latest_batch_duration() -> None:
+    metrics = Metrics()
+
+    metrics.record_batch_duration(1)
+    earlier_snapshot = metrics.snapshot()
+    metrics.record_batch_duration(2.5)
+
+    assert earlier_snapshot.last_batch_duration_seconds == 1.0
+    assert metrics.snapshot().to_dict()["last_batch_duration_seconds"] == 2.5
+
+
+@pytest.mark.parametrize(
+    "duration",
+    [-1, float("nan"), float("inf"), float("-inf"), True, "1", None],
+)
+def test_metrics_reject_invalid_batch_duration(duration: object) -> None:
+    metrics = Metrics()
+
+    with pytest.raises(ValueError, match="finite, non-negative number"):
+        metrics.record_batch_duration(duration)  # type: ignore[arg-type]
+
+    assert metrics.snapshot().last_batch_duration_seconds is None
 
 
 @pytest.mark.parametrize(

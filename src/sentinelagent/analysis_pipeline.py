@@ -45,6 +45,7 @@ class AnalysisPipeline:
         )
         self.batch_worker = BatchWorker(
             batch_handler=self._handle_batch,
+            on_duration=self.metrics.record_batch_duration,
         )
         self.event_stream = (
             event_stream if event_stream is not None else EventStream()
@@ -268,6 +269,6 @@ class AnalysisPipeline:
 
         return snapshot
 
-    def metrics_snapshot(self) -> dict[str, int]:
-        """Return a snapshot of pipeline processing counters."""
+    def metrics_snapshot(self) -> dict[str, int | float | None]:
+        """Return a snapshot of pipeline processing metrics."""
         return self.metrics.snapshot().to_dict()
