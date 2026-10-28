@@ -8,6 +8,7 @@ from urllib.request import Request, urlopen
 from sentinelagent.models import AgentRecord
 from sentinelagent.registry import AgentRegistry
 from sentinelagent.runtime_server import LocalSentinelRuntime, create_runtime_server
+from sentinelagent.persistent_audit import PersistentAuditTrail
 
 
 def make_registry() -> AgentRegistry:
@@ -152,3 +153,155 @@ def test_config_seeds_only_missing_agents_without_overwriting_existing(tmp_path)
     assert existing.permissions == {"keep"}
     assert registry.get("new-runtime").status.value == "ACTIVE"
     registry.close()
+
+def test_rejected_request_audit_callback_receives_only_safe_metadata():
+    registry = make_registry()
+    runtime = LocalSentinelRuntime(registry, batch_size=1)
+    recorded_rejections = []
+
+    def audit_rejection(status, error_code):
+        recorded_rejections.append({
+            "status": status,
+            "error_code": error_code,
+        })
+
+    server = create_runtime_server(
+        runtime, port=0, rejection_callback=audit_rejection
+    )
+    thread = threading.Thread(
+        target=lambda: server.serve_forever(poll_interval=0.01), daemon=True
+    )
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+
+    try:
+        payload = {
+            "request_id": "req-bad",
+            "trace_id": "trace-bad",
+            "edge_id": "edge",
+            "source_runtime_id": "runtime-A-001",
+            "target_runtime_id": "runtime-B-001",
+            "action": "SEND_MESSAGE",
+            "requested_permission": "message:send",
+            "credentials_reference": "SECRET_TEST_CREDENTIAL",
+            "raw_body": "SECRET_TEST_BODY",
+        }
+
+        try:
+            post_json(base + "/api/edge-requests", payload)
+        except HTTPError as exc:
+            assert exc.code == 400
+            exc.close()
+        else:
+            raise AssertionError("Unknown fields should be rejected")
+
+        assert recorded_rejections == [{
+            "status": 400,
+            "error_code": "invalid_edge_request",
+        }]
+        assert "SECRET_TEST_CREDENTIAL" not in repr(recorded_rejections)
+        assert "SECRET_TEST_BODY" not in repr(recorded_rejections)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        registry.close()
+
+def test_rejection_audit_callback_failure_does_not_break_http_response():
+    registry = make_registry()
+    runtime = LocalSentinelRuntime(registry, batch_size=1)
+
+    def failing_audit_callback(status, error_code):
+        raise RuntimeError("Simulated audit failure")
+
+    server = create_runtime_server(
+        runtime, port=0, rejection_callback=failing_audit_callback
+    )
+    thread = threading.Thread(
+        target=lambda: server.serve_forever(poll_interval=0.01), daemon=True
+    )
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+
+    try:
+        payload = {
+            "request_id": "req-bad",
+            "trace_id": "trace-bad",
+            "edge_id": "edge",
+            "source_runtime_id": "runtime-A-001",
+            "target_runtime_id": "runtime-B-001",
+            "action": "SEND_MESSAGE",
+            "requested_permission": "message:send",
+            "credentials_reference": "SECRET_TEST_CREDENTIAL",
+        }
+
+        try:
+            post_json(base + "/api/edge-requests", payload)
+        except HTTPError as exc:
+            assert exc.code == 400
+            assert json.load(exc)["error"] == "invalid_edge_request"
+        else:
+            raise AssertionError("Unknown fields should be rejected")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        registry.close()
+
+def test_rejected_http_request_is_persisted_safely_in_sqlite(tmp_path):
+    registry = make_registry()
+    runtime = LocalSentinelRuntime(registry, batch_size=1)
+    audit = PersistentAuditTrail(tmp_path / "audit.sqlite3")
+
+    def audit_rejection(status, error_code):
+        audit.record({
+            "event_type": "HTTP_REQUEST_REJECTED",
+            "http_status": status,
+            "error_code": error_code,
+        })
+
+    server = create_runtime_server(
+        runtime, port=0, rejection_callback=audit_rejection
+    )
+    thread = threading.Thread(
+        target=lambda: server.serve_forever(poll_interval=0.01),
+        daemon=True,
+    )
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+
+    try:
+        payload = {
+            "request_id": "req-audit-test",
+            "trace_id": "trace-audit-test",
+            "edge_id": "edge",
+            "source_runtime_id": "runtime-A-001",
+            "target_runtime_id": "runtime-B-001",
+            "action": "SEND_MESSAGE",
+            "requested_permission": "message:send",
+            "credentials_reference": "SECRET_CREDENTIAL",
+            "raw_body": "SECRET_REQUEST_BODY",
+        }
+
+        try:
+            post_json(base + "/api/edge-requests", payload)
+        except HTTPError as exc:
+            assert exc.code == 400
+            exc.close()
+        else:
+            raise AssertionError("Unknown fields should be rejected")
+
+        records = audit.list_recent()
+        assert len(records) == 1
+        assert records[0]["event_type"] == "HTTP_REQUEST_REJECTED"
+        assert records[0]["http_status"] == 400
+        assert records[0]["error_code"] == "invalid_edge_request"
+        assert "SECRET_CREDENTIAL" not in repr(records)
+        assert "SECRET_REQUEST_BODY" not in repr(records)
+        assert audit.verify_integrity()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        audit.close()
+        registry.close()

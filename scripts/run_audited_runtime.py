@@ -114,11 +114,51 @@ def main() -> int:
             batch_size=args.batch_size,
             max_wait_seconds=args.max_wait_seconds,
         )
-        server = create_runtime_server(runtime, host=args.host, port=args.port)
-        logging.info("Audited SentinelAgent runtime listening on http://%s:%d", args.host, server.server_address[1])
-        logging.info("Durable security audit database: %s", args.state_dir / "audit-trail.sqlite3")
-        logging.info("Dashboard: http://%s:%d/ | Submit edge events: POST /api/edge-requests", args.host, server.server_address[1])
+
+        def audit_http_rejection(status: int, error_code: str) -> None:
+            allowed_rejections = {
+                (400, "invalid_content_length"),
+                (400, "invalid_request_body_size"),
+                (400, "invalid_edge_request"),
+                (404, "not_found"),
+                (413, "invalid_request_body_size"),
+                (415, "content_type_must_be_application_json"),
+            }
+
+            if (status, error_code) not in allowed_rejections:
+                return
+
+            runtime.audit_trail.record(
+                {
+                    "event_type": "HTTP_REQUEST_REJECTED",
+                    "captured_at": utc_now(),
+                    "http_status": status,
+                    "error_code": error_code,
+                }
+            )
+
+        server = create_runtime_server(
+            runtime,
+            host=args.host,
+            port=args.port,
+            rejection_callback=audit_http_rejection,
+        )
+        logging.info(
+            "Audited SentinelAgent runtime listening on http://%s:%d",
+            args.host,
+            server.server_address[1],
+        )
+        logging.info(
+            "Durable security audit database: %s",
+            args.state_dir / "audit-trail.sqlite3",
+        )
+        logging.info(
+            "Dashboard: http://%s:%d/ | Submit edge events: POST /api/edge-requests",
+            args.host,
+            server.server_address[1],
+        )
         server.serve_forever(poll_interval=0.1)
+
     except KeyboardInterrupt:
         logging.info("Shutdown requested")
     finally:

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from http.server import HTTPServer
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 from sentinelagent.analysis_pipeline import AnalysisPipeline
@@ -106,48 +106,95 @@ class _RuntimeHTTPServer(HTTPServer):
                 "sentinel_runtime_batch_error error_type=%s",
                 type(exc).__name__,
             )
-
-
 def create_runtime_server(
     runtime: LocalSentinelRuntime,
     host: str = "127.0.0.1",
     port: int = 8765,
+    rejection_callback: Callable[[int, str], None] | None = None,
 ) -> HTTPServer:
     """Create the dashboard plus POST /api/edge-requests local endpoint."""
     if not (0 <= port <= 65535):
         raise ValueError("port must be between 0 and 65535")
+
+    allowed_rejections = {
+        (400, "invalid_content_length"),
+        (400, "invalid_request_body_size"),
+        (400, "invalid_edge_request"),
+        (404, "not_found"),
+        (413, "invalid_request_body_size"),
+        (415, "content_type_must_be_application_json"),
+    }
+
+    def record_rejection(status: int, error_code: str) -> None:
+        if rejection_callback is None:
+            return
+
+        if (status, error_code) not in allowed_rejections:
+            logger.warning("sentinel_runtime_rejection_audit_invalid_code")
+            return
+
+        try:
+            rejection_callback(status, error_code)
+        except Exception:
+            logger.exception("sentinel_runtime_rejection_audit_error")
+
     BaseHandler = make_handler(runtime.dashboard_provider)
 
     class RuntimeHandler(BaseHandler):
         def do_POST(self) -> None:  # noqa: N802 - stdlib handler contract
             path = urlparse(self.path).path
+
             if path != "/api/edge-requests":
+                record_rejection(404, "not_found")
                 self._send(404, {"error": "not_found"})
+                self.close_connection = True
                 return
 
             content_type = self.headers.get("Content-Type", "")
             if "application/json" not in content_type.lower():
-                self._send(415, {"error": "content_type_must_be_application_json"})
+                record_rejection(
+                    415,
+                    "content_type_must_be_application_json",
+                )
+                self._send(
+                    415,
+                    {"error": "content_type_must_be_application_json"},
+                )
                 return
 
             raw_length = self.headers.get("Content-Length")
             try:
                 length = int(raw_length or "0")
             except ValueError:
+                record_rejection(400, "invalid_content_length")
                 self._send(400, {"error": "invalid_content_length"})
                 return
+
             if length <= 0 or length > MAX_REQUEST_BYTES:
-                self._send(413 if length > MAX_REQUEST_BYTES else 400,
-                           {"error": "invalid_request_body_size"})
+                status = 413 if length > MAX_REQUEST_BYTES else 400
+                record_rejection(status, "invalid_request_body_size")
+                self._send(status, {"error": "invalid_request_body_size"})
                 return
 
             try:
                 payload = json.loads(self.rfile.read(length).decode("utf-8"))
                 if not isinstance(payload, dict):
                     raise ValueError("JSON body must be an object")
-                response = runtime.submit_edge_request(payload)
             except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-                self._send(400, {"error": "invalid_edge_request", "detail": str(exc)})
+                record_rejection(400, "invalid_edge_request")
+                self._send(
+                    400,
+                    {"error": "invalid_edge_request", "detail": str(exc)},
+                )
+                return
+
+            try:
+                response = runtime.submit_edge_request(payload)
+            except ValueError as exc:
+                # Validation failures are client errors; do not expose details
+                # that could contain untrusted input.
+                record_rejection(400, "invalid_edge_request")
+                self._send(400, {"error": "invalid_edge_request"})
                 return
             except Exception as exc:
                 logger.error(
