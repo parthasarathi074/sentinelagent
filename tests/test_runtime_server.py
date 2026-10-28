@@ -207,7 +207,7 @@ def test_rejected_request_audit_callback_receives_only_safe_metadata():
         thread.join(timeout=2)
         registry.close()
 
-def test_rejection_audit_callback_failure_does_not_break_http_response():
+def test_rejection_audit_callback_failure_does_not_break_http_response(caplog):
     registry = make_registry()
     runtime = LocalSentinelRuntime(registry, batch_size=1)
 
@@ -242,6 +242,11 @@ def test_rejection_audit_callback_failure_does_not_break_http_response():
             assert json.load(exc)["error"] == "invalid_edge_request"
         else:
             raise AssertionError("Unknown fields should be rejected")
+        assert (
+            "sentinel_runtime_rejection_audit_error error_type=RuntimeError"
+            in caplog.text
+        )
+        assert "Simulated audit failure" not in caplog.text
     finally:
         server.shutdown()
         server.server_close()

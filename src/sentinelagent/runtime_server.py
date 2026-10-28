@@ -106,6 +106,7 @@ class _RuntimeHTTPServer(HTTPServer):
                 "sentinel_runtime_batch_error error_type=%s",
                 type(exc).__name__,
             )
+
 def create_runtime_server(
     runtime: LocalSentinelRuntime,
     host: str = "127.0.0.1",
@@ -135,8 +136,11 @@ def create_runtime_server(
 
         try:
             rejection_callback(status, error_code)
-        except Exception:
-            logger.exception("sentinel_runtime_rejection_audit_error")
+        except Exception as exc:
+            logger.error(
+                "sentinel_runtime_rejection_audit_error error_type=%s",
+                type(exc).__name__,
+            )
 
     BaseHandler = make_handler(runtime.dashboard_provider)
 
