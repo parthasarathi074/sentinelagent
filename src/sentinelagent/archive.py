@@ -9,14 +9,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
 import sqlite3
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import BinaryIO, Protocol
+from typing import Protocol
 
 
 def _utcnow() -> datetime:
@@ -241,9 +240,11 @@ class ArchiveManager:
     def list_records(self, *, state: str | None = None, category: str | None = None) -> list[ArchiveRecord]:
         sql, params = "SELECT * FROM archive_records WHERE 1=1", []
         if state:
-            sql += " AND state=?"; params.append(state.upper())
+                    sql += " AND state=?"
+                    params.append(state.upper())
         if category:
-            sql += " AND category=?"; params.append(category)
+            sql += " AND category=?"
+            params.append(category)
         sql += " ORDER BY archived_at DESC"
         with self._connect() as db:
             rows = db.execute(sql, params).fetchall()

@@ -1,47 +1,105 @@
 # Persistent SentinelAgent Audit Trail
 
-## Start the audited local runtime
+## 1. Overview
 
-Use the new runner instead of `scripts/run_live_runtime.py` when you want
-request authorization outcomes stored durably:
+SentinelAgent provides persistent audit history for security decisions and event-processing lifecycle activity.
+
+The audited local runtime combines the registry, persistent event stream, and audit storage using SQLite-backed state.
+
+The audit trail is intended to make important prototype security and processing operations inspectable across process restarts.
+
+## 2. Starting the audited runtime
+
+From the project root, run:
 
 ```powershell
-py -3.14 .\scripts\run_audited_runtime.py
+.\.venv\Scripts\python.exe .\scripts\run_audited_runtime.py
 ```
 
-The default state directory is `%USERPROFILE%\.sentinelagent\runtime`. The
-runner uses separate SQLite files for `agent-registry.sqlite3` and
-`audit-trail.sqlite3`. You can override the directory with
-`--state-dir C:\path\to\state` and configure host/port as with the regular
-runner. Keep it bound to loopback unless authentication and TLS are provided.
+The runtime uses its configured local state directory. Refer to the runtime script and deployment documentation for supported configuration options.
 
-## What is recorded
+Keep the local HTTP runtime bound to loopback unless an appropriately secured deployment has been implemented.
 
-For successfully parsed edge requests, the trail records an allowlisted subset
-of metadata and the resulting `ALLOW`, `DENY`, `RESTRICT`, or `THROTTLE`
-decision. It also records request-processing exception types without exception
-messages. It does not persist raw request bodies, credentials, or arbitrary
-payload fields. Dashboard snapshots expose recent records through `audit_trail`
-and set `audit_trail_configured` to `true`.
+## 3. Audited activity
 
-Each entry is chained to the previous SHA-256 hash. `verify_integrity()` checks
-all links and hashes at startup and can be called for verification. A chain
-break prevents the audited runtime from starting, rather than silently treating
-a corrupted trail as valid. Hash chaining is tamper-evident, not immutable
-storage against an administrator who can rewrite the whole database; restrict
-file permissions and back up the audit file off-host for stronger assurance.
+The persistent audit implementation records security decisions and supported processing lifecycle transitions.
 
-## Scope and production boundary
+The event-processing lifecycle includes:
+- Batch started.
+- Batch retried.
+- Batch failed.
+- Batch succeeded.
+- Batch recovered after interruption.
 
-This covers the local HTTP edge-request authorization path. It is not a
-replacement for source-side audit exports, Kafka broker audit logs, OPA
-decision logs, or data-lake access records. It does not yet audit malformed
-HTTP bodies rejected before `submit_edge_request`, nor does it guarantee
-atomicity between the existing in-memory event queue and the SQLite write. If
-the audit database becomes unavailable after the pipeline has queued a request,
-the endpoint can return an error even though queueing already occurred. A
-production design should use a transactional outbox or a broker with durable
-acknowledgement and a defined audit-write failure policy.
+Audit records are designed to retain safe metadata rather than arbitrary event payloads or credentials.
 
-Configure retention, access controls, off-host backups, and alerting according
-to your requirements before production use.
+The implementation records error types rather than arbitrary exception messages where applicable.
+
+## 4. Transactional outbox
+
+The persistent event stream and audit history use coordinated SQLite transaction handling.
+
+For event publication, the event and its required audit record are committed together.
+
+If the required audit write fails, the transaction is rolled back rather than leaving the event published without its corresponding audit record.
+
+Batch lifecycle transitions also use transactional handling so that a required lifecycle audit failure does not silently leave the corresponding state transition committed.
+
+This is the transactional outbox behavior implemented by the persistent event-processing path.
+
+## 5. Persistent processing and recovery
+
+The persistent event stream stores pending events and processing state.
+
+If processing is interrupted, pending work can be recovered after restart. Recovery is recorded in the audit history and preserves the relevant batch identity.
+
+Successful acknowledgement does not remove the event from historical audit visibility.
+
+Processing follows at-least-once semantics. A batch may be attempted again after interruption or failure.
+
+The system does not guarantee exactly-once execution of external side effects. External operations should be designed to tolerate retries.
+
+## 6. Audit integrity
+
+The persistent audit implementation uses a SHA-256 hash chain to detect modifications to recorded audit history.
+
+The chain can detect certain forms of record alteration or deletion when the chain is subsequently verified.
+
+A hash chain is tamper-evident, not immutable. An administrator with sufficient access to the database and its contents may be able to rewrite the database and recompute the chain.
+
+It should not be treated as a replacement for independently protected audit exports, access controls, or external immutable storage.
+
+## 7. Security and privacy boundaries
+
+Audit records should contain only the metadata needed to explain security and lifecycle decisions.
+
+Do not store:
+- Passwords.
+- Authentication tokens.
+- Private keys.
+- Raw credentials.
+- Unnecessary request bodies.
+- Arbitrary sensitive payload content.
+
+The audited runtime does not establish a complete organization-wide audit system. External data sources, external services, broker administration, and integrations require their own audit coverage.
+
+Audit coverage depends on the request path. The runtime includes tests for safely persisting rejected HTTP request metadata. This should not be interpreted as proof that every possible failure before request submission is audited.
+
+## 8. Current limitations
+
+The persistent audit trail is a local prototype implementation.
+
+It does not by itself provide:
+- A centralized distributed audit service.
+- External immutable audit storage.
+- Production key management.
+- Multi-node audit coordination.
+- Complete audit coverage of every external service.
+- Exactly-once external side effects.
+- Production authentication and transport security for the dashboard.
+
+## 9. Related documentation
+
+- [Event Stream Architecture](event-stream-architecture.md)
+- [Live Runtime](live-runtime.md)
+- [Production Deployment](production-deployment.md)

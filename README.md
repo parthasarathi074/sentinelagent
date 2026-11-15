@@ -121,3 +121,39 @@ The generated distribution files are written to the `dist/` directory. The packa
 ## Project Scope
 
 SentinelAgent is an evolving prototype for experimentation and research into multi-agent pipeline security. Security decisions and recovery behavior should be evaluated in a controlled environment before any production use.
+
+## Developer resources
+
+For development and contribution instructions, see:
+
+- [Documentation index](docs/README.md)
+- [Contribution guidelines](CONTRIBUTING.md)
+- [Event stream architecture](docs/event-stream-architecture.md)
+- [Persistent audit trail](docs/persistent-audit-trail.md)
+- [Production deployment and limitations](docs/production-deployment.md)
+
+### Developer commands
+
+Install development dependencies:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+```
+
+Run tests:
+
+```powershell
+.\scripts\dev.ps1 -Task test
+```
+
+Run lint checks:
+
+```powershell
+.\scripts\dev.ps1 -Task lint
+```
+
+Build the package:
+
+```powershell
+.\scripts\dev.ps1 -Task build
+```

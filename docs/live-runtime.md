@@ -1,6 +1,6 @@
 # Local live SentinelAgent runtime
 
-`py -3.14 .\scripts\run_live_runtime.py` starts the existing edge, analysis,
+`.\.venv\Scripts\python.exe .\scripts\run_live_runtime.py` starts the existing edge, analysis,
 policy, recovery, registry, and read-only dashboard objects inside one process.
 The registry is persisted to SQLite under `%USERPROFILE%\.sentinelagent\runtime`
 by default. Override its location with `SENTINEL_STATE_DIR` or `--state-dir`.

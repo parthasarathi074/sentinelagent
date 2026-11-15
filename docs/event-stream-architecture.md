@@ -19,6 +19,16 @@ Sentinel Edge performs fast inline security decisions, while deeper analysis is 
 
 ---
 
+## Implementation Status
+
+This document describes the intended SentinelAgent event-streaming and micro-batch architecture.
+
+The target architecture uses Apache Kafka, the `sentinel.events` topic, `edge_id` partitioning, parallel workers, and asynchronous behavioral, temporal, graph, and collusion analysis.
+
+The current prototype includes in-memory and persistent SQLite event-stream implementations, along with an optional Kafka adapter. A fully deployed Kafka-based distributed worker environment is a future integration and should not be assumed to be active.
+
+The architectural decisions documented below define the intended direction of the project. Implementation status may differ between the current prototype and future distributed deployment.
+
 ## 2. Event Flow
 
 The event flow is:

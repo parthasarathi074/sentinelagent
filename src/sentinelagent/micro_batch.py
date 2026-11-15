@@ -154,4 +154,10 @@ class MicroBatchProcessor:
         )
         if callable(acknowledge_batch):
             acknowledge_batch(batch)
-            return batch
+
+        if self.event_stream.size() == 0:
+            self._batch_started_at = None
+        else:
+            self._batch_started_at = self.clock()
+
+        return batch

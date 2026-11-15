@@ -7,9 +7,9 @@ SRC = ROOT / "src"
 
 sys.path.insert(0, str(SRC))
 
-from sentinelagent.edge import SentinelEdge
-from sentinelagent.models import AgentRecord, EdgeRequest
-from sentinelagent.registry import AgentRegistry
+from sentinelagent.edge import SentinelEdge  # noqa: E402
+from sentinelagent.models import AgentRecord, EdgeRequest  # noqa: E402
+from sentinelagent.registry import AgentRegistry  # noqa: E402
 
 
 def main() -> None:

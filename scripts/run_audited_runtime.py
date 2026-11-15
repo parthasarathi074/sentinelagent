@@ -81,8 +81,7 @@ class AuditedLocalSentinelRuntime(LocalSentinelRuntime):
 
     def submit_edge_request(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
-            return super().submit_edge_request(payload)
-
+            response = super().submit_edge_request(payload)
         except Exception as exc:
             try:
                 self.audit_trail.record({
@@ -100,27 +99,8 @@ class AuditedLocalSentinelRuntime(LocalSentinelRuntime):
                     type(audit_exc).__name__,
                 )
             raise
-
-        # Allowlist only: never store request bodies, credentials, or arbitrary
-        # payload keys. This deliberately logs DENY as well as ALLOW outcomes.
-        audit_event = {
-            "event_type": "EDGE_AUTHORIZATION",
-            "captured_at": utc_now(),
-            "request_id": _safe_text(response.get("request_id")),
-            "trace_id": _safe_text(payload.get("trace_id")),
-            "edge_id": _safe_text(response.get("edge_id")),
-            "source_runtime_id": _safe_text(payload.get("source_runtime_id")),
-            "target_runtime_id": _safe_text(payload.get("target_runtime_id")),
-            "action": _safe_text(payload.get("action")),
-            "requested_permission": _safe_text(payload.get("requested_permission")),
-            "resource_id": _safe_text(payload.get("resource_id")),
-            "decision": _safe_text(response.get("decision")),
-            "reason": _safe_text(response.get("reason")),
-            "accepted": response.get("accepted") is True,
-            "event_queued": response.get("event_queued") is True,
-        }
-        self.audit_trail.record(audit_event)
         return response
+
 
 
 def main() -> int:

@@ -204,7 +204,7 @@ def create_runtime_server(
 
             try:
                 response = runtime.submit_edge_request(payload)
-            except ValueError as exc:
+            except ValueError:
                 # Validation failures are client errors; do not expose details
                 # that could contain untrusted input.
                 record_rejection(400, "invalid_edge_request")
