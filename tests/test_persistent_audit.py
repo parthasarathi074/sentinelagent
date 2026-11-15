@@ -57,3 +57,87 @@ def test_write_uses_hash_chain(tmp_path):
     assert len(second["event_hash"]) == 64
     assert trail.verify_integrity()
     trail.close()
+
+
+def test_insert_failure_rolls_back_transaction(tmp_path):
+    path = tmp_path / "audit.sqlite3"
+    trail = PersistentAuditTrail(path)
+
+    trail._connection.execute(
+        """
+        CREATE TRIGGER fail_audit_insert
+        BEFORE INSERT ON audit_entries
+        BEGIN
+            SELECT RAISE(ABORT, 'simulated insert failure');
+        END;
+        """
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="simulated insert failure"):
+        trail.record({"event_type": "TEST_FAILURE"})
+
+    assert trail._connection.in_transaction is False
+    assert trail.list_recent() == []
+
+    trail._connection.execute("DROP TRIGGER fail_audit_insert")
+    record = trail.record({"event_type": "TEST_RECOVERY"})
+    assert record["event_type"] == "TEST_RECOVERY"
+    assert trail.verify_integrity()
+
+    trail.close()
+
+
+def test_rollback_failure_does_not_hide_original_insert_error(tmp_path):
+    trail = PersistentAuditTrail(tmp_path / "audit.sqlite3")
+
+    trail._connection.execute(
+        """
+        CREATE TRIGGER fail_audit_insert
+        BEFORE INSERT ON audit_entries
+        BEGIN
+            SELECT RAISE(ABORT, 'original insert failure');
+        END;
+        """
+    )
+
+    original_connection = trail._connection
+
+    class RollbackFailingConnection:
+        def execute(self, sql, parameters=()):
+            if sql == "ROLLBACK":
+                raise sqlite3.OperationalError("simulated rollback failure")
+            return original_connection.execute(sql, parameters)
+
+    trail._connection = RollbackFailingConnection()
+
+    with pytest.raises(sqlite3.IntegrityError, match="original insert failure"):
+        trail.record({"event_type": "TEST_FAILURE"})
+
+    original_connection.close()
+
+
+def test_record_in_transaction_respects_caller_rollback(tmp_path):
+    trail = PersistentAuditTrail(tmp_path / "audit.sqlite3")
+    connection = trail._connection
+
+    connection.execute("BEGIN IMMEDIATE")
+
+    record = trail.record_in_transaction(
+        connection,
+        {
+            "event_type": "TRANSACTIONAL_TEST",
+            "decision": "ALLOW",
+        },
+    )
+
+    assert record["event_type"] == "TRANSACTIONAL_TEST"
+    assert connection.in_transaction is True
+    assert len(trail.list_recent()) == 1
+
+    connection.execute("ROLLBACK")
+
+    assert connection.in_transaction is False
+    assert trail.list_recent() == []
+    assert trail.verify_integrity() is True
+
+    trail.close()

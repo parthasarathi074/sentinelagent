@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import sys
+import pytest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from run_live_runtime import seed_missing_agents  # noqa: E402
-from run_audited_runtime import AuditedLocalSentinelRuntime  # noqa: E402
+from scripts.run_live_runtime import seed_missing_agents  # noqa: E402
+from scripts.run_audited_runtime import AuditedLocalSentinelRuntime  # noqa: E402
 from sentinelagent.persistent_audit import PersistentAuditTrail  # noqa: E402
 from sentinelagent.registry import AgentRegistry  # noqa: E402
 
@@ -77,6 +78,61 @@ def test_audit_excludes_arbitrary_payload_fields(tmp_path):
             pass
         assert all("secret" not in record for record in audit.list_recent())
         assert all("do-not-record-this" not in json.dumps(record) for record in audit.list_recent())
+    finally:
+        audit.close()
+        registry.close()
+
+
+def test_authorization_fails_closed_when_audit_write_fails(tmp_path, monkeypatch):
+    registry = AgentRegistry(database_path=tmp_path / "registry.sqlite3")
+    audit = PersistentAuditTrail(tmp_path / "audit.sqlite3")
+    seed_missing_agents(registry, ROOT / "config" / "local-agents.example.json")
+    runtime = AuditedLocalSentinelRuntime(registry, audit)
+
+    def fail_record_in_transaction(connection, event):
+        raise OSError("simulated audit database failure")
+
+    monkeypatch.setattr(
+    audit,
+    "record_in_transaction",
+    fail_record_in_transaction,
+)
+
+    payload = {
+        "trace_id": "trace-audit-failure",
+        "edge_id": "edge-agent-A-agent-B",
+        "source_runtime_id": "runtime-A-001",
+        "target_runtime_id": "runtime-B-001",
+        "resource_id": "resource-test",
+        "request_id": "audit-write-failure",
+        "action": "SEND_MESSAGE",
+        "requested_permission": "message:send",
+    }
+
+    try:
+        with pytest.raises(OSError, match="simulated audit database failure"):
+            runtime.submit_edge_request(payload)
+    finally:
+        audit.close()
+        registry.close()
+
+
+def test_error_audit_failure_does_not_hide_original_authorization_error(
+    tmp_path, monkeypatch
+):
+    registry = AgentRegistry(database_path=tmp_path / "registry.sqlite3")
+    audit = PersistentAuditTrail(tmp_path / "audit.sqlite3")
+    seed_missing_agents(registry, ROOT / "config" / "local-agents.example.json")
+    runtime = AuditedLocalSentinelRuntime(registry, audit)
+
+    def fail_record(event):
+        raise OSError("simulated audit database failure")
+
+    monkeypatch.setattr(audit, "record", fail_record)
+
+    try:
+        with pytest.raises(ValueError, match="unknown"):
+            runtime.submit_edge_request({"unknown_field": "invalid"})
     finally:
         audit.close()
         registry.close()

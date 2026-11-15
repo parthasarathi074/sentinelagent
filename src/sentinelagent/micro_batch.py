@@ -134,21 +134,24 @@ class MicroBatchProcessor:
                     self._retry_batch_id = batch_id
                     self.batch_handler_with_id(batch, batch_id)
                     self._retry_batch_id = None
-            except Exception:
-                self.event_stream.restore_batch(batch)
+            except Exception as exc:
+                restore_batch = self.event_stream.restore_batch
+
+                if getattr(self.event_stream, "_audit_trail", None) is not None:
+                    restore_batch(
+                        batch,
+                        error_type=type(exc).__name__,
+                    )
+                else:
+                    restore_batch(batch)
+
                 self._retry_events_pending += len(batch)
                 self._batch_started_at = None
                 raise
 
-            acknowledge_batch = getattr(
-                self.event_stream, "acknowledge_batch", None
-            )
-            if callable(acknowledge_batch):
-                acknowledge_batch(batch)
-
-        if self.event_stream.size() == 0:
-            self._batch_started_at = None
-        else:
-            self._batch_started_at = self.clock()
-
-        return batch
+        acknowledge_batch = getattr(
+            self.event_stream, "acknowledge_batch", None
+        )
+        if callable(acknowledge_batch):
+            acknowledge_batch(batch)
+            return batch

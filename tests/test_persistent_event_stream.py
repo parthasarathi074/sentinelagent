@@ -5,6 +5,7 @@ import pytest
 from sentinelagent.event_stream import EventStream
 from sentinelagent.micro_batch import MicroBatchProcessor
 from sentinelagent.persistent_event_stream import PersistentEventStream
+from sentinelagent.persistent_audit import PersistentAuditTrail
 
 
 def test_events_survive_close_and_reopen(tmp_path):
@@ -438,3 +439,312 @@ def test_partial_retry_does_not_complete_unreturned_events(tmp_path):
         assert stream.size() == 0
     finally:
         stream.close()
+
+
+def test_event_and_audit_are_rolled_back_together_when_audit_fails(
+    tmp_path,
+):
+    database_path = tmp_path / "shared.db"
+
+    audit = PersistentAuditTrail(database_path)
+    stream = PersistentEventStream(
+        database_path,
+        audit_trail=audit,
+    )
+
+    try:
+        original_record = audit.record_in_transaction
+
+        def failing_audit_write(connection, event):
+            original_record(connection, event)
+            raise RuntimeError("simulated audit failure")
+
+        audit.record_in_transaction = failing_audit_write
+
+        with pytest.raises(RuntimeError, match="simulated audit failure"):
+            stream.publish(
+                {"agent": "A", "event": "accepted"},
+                audit_event={
+                    "event_type": "EDGE_AUTHORIZATION",
+                    "decision": "allowed",
+                },
+            )
+
+        event_count = stream._connection.execute(
+            "SELECT COUNT(*) FROM events"
+        ).fetchone()[0]
+
+        audit_count = stream._connection.execute(
+            "SELECT COUNT(*) FROM audit_entries"
+        ).fetchone()[0]
+
+        assert event_count == 0
+        assert audit_count == 0
+
+    finally:
+        stream.close()
+        audit.close()
+
+
+def test_event_and_audit_are_saved_together_when_publish_succeeds(
+    tmp_path,
+):
+    database_path = tmp_path / "shared_success.db"
+
+    audit = PersistentAuditTrail(database_path)
+    stream = PersistentEventStream(
+        database_path,
+        audit_trail=audit,
+    )
+
+    try:
+        stream.publish(
+            {"agent": "A", "event": "accepted"},
+            audit_event={
+                "event_type": "EDGE_AUTHORIZATION",
+                "decision": "allowed",
+            },
+        )
+
+        event_count = stream._connection.execute(
+            "SELECT COUNT(*) FROM events"
+        ).fetchone()[0]
+
+        audit_count = stream._connection.execute(
+            "SELECT COUNT(*) FROM audit_entries"
+        ).fetchone()[0]
+
+        assert event_count == 1
+        assert audit_count == 1
+        assert stream.size() == 1
+
+    finally:
+        stream.close()
+        audit.close()
+
+
+
+def test_batch_lifecycle_is_audited_in_order(tmp_path):
+    from sentinelagent.persistent_audit import PersistentAuditTrail
+    from sentinelagent.persistent_event_stream import PersistentEventStream
+
+    database = tmp_path / "lifecycle.sqlite3"
+    audit = PersistentAuditTrail(database)
+    stream = PersistentEventStream(database, audit_trail=audit)
+
+    try:
+        stream.publish({"event": "test"})
+        batch = stream.consume_batch(1)
+        stream.acknowledge_batch(batch)
+
+        records = list(reversed(audit.list_recent()))
+        event_types = [record["event_type"] for record in records]
+
+        assert event_types == [
+            "BATCH_PROCESSING_STARTED",
+            "BATCH_PROCESSING_SUCCEEDED",
+        ]
+        assert records[0]["batch_id"] == records[1]["batch_id"]
+        assert records[0]["event_count"] == 1
+        assert records[1]["event_count"] == 1
+        assert audit.verify_integrity()
+    finally:
+        stream.close()
+        audit.close()
+
+
+def test_failed_batch_records_error_type_and_can_be_retried(tmp_path):
+    from sentinelagent.persistent_audit import PersistentAuditTrail
+    from sentinelagent.persistent_event_stream import PersistentEventStream
+
+    database = tmp_path / "failed-lifecycle.sqlite3"
+    audit = PersistentAuditTrail(database)
+    stream = PersistentEventStream(database, audit_trail=audit)
+
+    try:
+        stream.publish({"event": "test"})
+        batch = stream.consume_batch(1)
+        original_batch_id = stream.batch_id_for(batch)
+
+        stream.restore_batch(batch, error_type="RuntimeError")
+
+        retry = stream.consume_batch(1)
+
+        assert stream.batch_id_for(retry) == original_batch_id
+
+        records = list(reversed(audit.list_recent()))
+        event_types = [record["event_type"] for record in records]
+
+        assert event_types == [
+            "BATCH_PROCESSING_STARTED",
+            "BATCH_PROCESSING_FAILED",
+            "BATCH_PROCESSING_RETRIED",
+        ]
+        assert records[1]["error_type"] == "RuntimeError"
+        assert audit.verify_integrity()
+    finally:
+        stream.close()
+        audit.close()
+
+
+def test_restart_recovery_is_audited_and_preserves_batch_id(tmp_path):
+    from sentinelagent.persistent_audit import PersistentAuditTrail
+    from sentinelagent.persistent_event_stream import PersistentEventStream
+
+    database = tmp_path / "recovery-lifecycle.sqlite3"
+    audit = PersistentAuditTrail(database)
+    first_stream = PersistentEventStream(database, audit_trail=audit)
+
+    first_stream.publish({"event": "test"})
+    first_batch = first_stream.consume_batch(1)
+    original_batch_id = first_stream.batch_id_for(first_batch)
+    first_stream.close()
+
+    recovered_stream = PersistentEventStream(
+        database,
+        audit_trail=audit,
+    )
+
+    try:
+        retry = recovered_stream.consume_batch(1)
+
+        assert recovered_stream.batch_id_for(retry) == original_batch_id
+
+        records = list(reversed(audit.list_recent()))
+        event_types = [record["event_type"] for record in records]
+
+        assert event_types == [
+            "BATCH_PROCESSING_STARTED",
+            "BATCH_RECOVERED",
+            "BATCH_PROCESSING_RETRIED",
+        ]
+        assert audit.verify_integrity()
+    finally:
+        recovered_stream.close()
+        audit.close()
+
+
+def test_lifecycle_audit_failure_rolls_back_batch_claim(tmp_path):
+    from sentinelagent.persistent_audit import PersistentAuditTrail
+    from sentinelagent.persistent_event_stream import PersistentEventStream
+
+    database = tmp_path / "claim-rollback.sqlite3"
+    audit = PersistentAuditTrail(database)
+    stream = PersistentEventStream(database, audit_trail=audit)
+
+    try:
+        stream.publish({"event": "test"})
+
+        original_record = audit.record_in_transaction
+
+        def failing_record(connection, event):
+            raise RuntimeError("simulated lifecycle audit failure")
+
+        audit.record_in_transaction = failing_record
+
+        try:
+            stream.consume_batch(1)
+        except RuntimeError as exc:
+            assert str(exc) == "simulated lifecycle audit failure"
+        else:
+            raise AssertionError("Expected lifecycle audit failure")
+
+        audit.record_in_transaction = original_record
+
+        assert stream.size() == 1
+
+        batch = stream.consume_batch(1)
+        assert len(batch) == 1
+        assert audit.verify_integrity()
+    finally:
+        stream.close()
+        audit.close()
+
+
+def test_success_audit_failure_rolls_back_acknowledgement(tmp_path):
+    from sentinelagent.persistent_audit import PersistentAuditTrail
+    from sentinelagent.persistent_event_stream import PersistentEventStream
+
+    database = tmp_path / "ack-rollback.sqlite3"
+    audit = PersistentAuditTrail(database)
+    stream = PersistentEventStream(database, audit_trail=audit)
+
+    try:
+        stream.publish({"event": "test"})
+        batch = stream.consume_batch(1)
+
+        original_record = audit.record_in_transaction
+
+        def failing_record(connection, event):
+            raise RuntimeError("simulated success audit failure")
+
+        audit.record_in_transaction = failing_record
+
+        try:
+            stream.acknowledge_batch(batch)
+        except RuntimeError as exc:
+            assert str(exc) == "simulated success audit failure"
+        else:
+            raise AssertionError("Expected lifecycle audit failure")
+
+        audit.record_in_transaction = original_record
+
+        # The failed acknowledgement must leave the batch in flight.
+        assert stream.size() == 0
+
+        stream.restore_batch(batch)
+        assert stream.size() == 1
+        assert audit.verify_integrity()
+    finally:
+        stream.close()
+        audit.close()
+
+
+def test_recovery_audit_failure_rolls_back_recovery(tmp_path):
+    from sentinelagent.persistent_audit import PersistentAuditTrail
+    from sentinelagent.persistent_event_stream import PersistentEventStream
+
+    database = tmp_path / "recovery-rollback.sqlite3"
+    audit = PersistentAuditTrail(database)
+    first_stream = PersistentEventStream(database, audit_trail=audit)
+
+    first_stream.publish({"event": "test"})
+    first_stream.consume_batch(1)
+    first_stream.close()
+
+    original_record = audit.record_in_transaction
+
+    def failing_record(connection, event):
+        raise RuntimeError("simulated recovery audit failure")
+
+    audit.record_in_transaction = failing_record
+
+    try:
+        try:
+            PersistentEventStream(database, audit_trail=audit)
+        except RuntimeError as exc:
+            assert str(exc) == "simulated recovery audit failure"
+        else:
+            raise AssertionError("Expected recovery audit failure")
+
+        audit.record_in_transaction = original_record
+
+        # A second startup must still be able to recover the batch.
+        recovered_stream = PersistentEventStream(
+            database,
+            audit_trail=audit,
+        )
+        try:
+            batch = recovered_stream.consume_batch(1)
+            assert len(batch) == 1
+
+            records = list(reversed(audit.list_recent()))
+            event_types = [record["event_type"] for record in records]
+
+            assert "BATCH_RECOVERED" in event_types
+            assert audit.verify_integrity()
+        finally:
+            recovered_stream.close()
+    finally:
+        audit.record_in_transaction = original_record
+        audit.close()

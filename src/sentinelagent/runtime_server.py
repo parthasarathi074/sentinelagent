@@ -44,6 +44,7 @@ class LocalSentinelRuntime:
         *,
         batch_size: int = 10,
         max_wait_seconds: float = 1.0,
+        event_stream: Any | None = None,
     ) -> None:
         if batch_size <= 0:
             raise ValueError("batch_size must be greater than zero")
@@ -54,6 +55,7 @@ class LocalSentinelRuntime:
         # this local runner. Use a durable broker/stream adapter for production.
         self.pipeline = AnalysisPipeline(
             registry=registry,
+            event_stream=event_stream,
             batch_size=batch_size,
             max_wait_seconds=max_wait_seconds,
         )
@@ -149,9 +151,17 @@ def create_runtime_server(
             path = urlparse(self.path).path
 
             if path != "/api/edge-requests":
+                raw_length = self.headers.get("Content-Length", "0")
+                try:
+                    body_length = int(raw_length)
+                except ValueError:
+                    body_length = 0
+
+                if 0 < body_length <= MAX_REQUEST_BYTES:
+                    self.rfile.read(body_length)
+
                 record_rejection(404, "not_found")
                 self._send(404, {"error": "not_found"})
-                self.close_connection = True
                 return
 
             content_type = self.headers.get("Content-Type", "")

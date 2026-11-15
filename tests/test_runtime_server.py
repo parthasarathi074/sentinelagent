@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import threading
+import pytest
+import sys
+from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -116,7 +119,7 @@ def test_runtime_rejects_unknown_fields_and_unknown_post_routes():
         registry.close()
 
 
-def test_config_seeds_only_missing_agents_without_overwriting_existing(tmp_path):
+def test_config_seeds_only_missing_agents_without_overwriting_existing(tmp_path: Path):
     from scripts.run_live_runtime import seed_missing_agents
 
     registry = AgentRegistry()
@@ -207,7 +210,7 @@ def test_rejected_request_audit_callback_receives_only_safe_metadata():
         thread.join(timeout=2)
         registry.close()
 
-def test_rejection_audit_callback_failure_does_not_break_http_response(caplog):
+def test_rejection_audit_callback_failure_does_not_break_http_response(caplog: pytest.LogCaptureFixture):
     registry = make_registry()
     runtime = LocalSentinelRuntime(registry, batch_size=1)
 
@@ -253,7 +256,7 @@ def test_rejection_audit_callback_failure_does_not_break_http_response(caplog):
         thread.join(timeout=2)
         registry.close()
 
-def test_rejected_http_request_is_persisted_safely_in_sqlite(tmp_path):
+def test_rejected_http_request_is_persisted_safely_in_sqlite(tmp_path: Path):
     registry = make_registry()
     runtime = LocalSentinelRuntime(registry, batch_size=1)
     audit = PersistentAuditTrail(tmp_path / "audit.sqlite3")
@@ -304,6 +307,65 @@ def test_rejected_http_request_is_persisted_safely_in_sqlite(tmp_path):
         assert "SECRET_CREDENTIAL" not in repr(records)
         assert "SECRET_REQUEST_BODY" not in repr(records)
         assert audit.verify_integrity()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        audit.close()
+        registry.close()
+
+def test_authorization_audit_failure_returns_http_500_and_event_is_not_queued(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(root / "scripts"))
+    from run_audited_runtime import AuditedLocalSentinelRuntime
+
+    registry = make_registry()
+    audit = PersistentAuditTrail(tmp_path / "audit.sqlite3")
+    runtime = AuditedLocalSentinelRuntime(
+        registry,
+        audit,
+        batch_size=10,
+        max_wait_seconds=60.0,
+    )
+    def fail_record_in_transaction(connection, event):
+            raise OSError("simulated audit database failure")
+
+    monkeypatch.setattr(
+        audit,
+        "record_in_transaction",
+        fail_record_in_transaction,
+ )
+
+    server = create_runtime_server(runtime, port=0)
+    thread = threading.Thread(
+        target=lambda: server.serve_forever(poll_interval=0.01),
+        daemon=True,
+    )
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+
+    try:
+        payload = {
+            "request_id": "req-audit-failure",
+            "trace_id": "trace-audit-failure",
+            "edge_id": "edge-agent-A-agent-B",
+            "source_runtime_id": "runtime-A-001",
+            "target_runtime_id": "runtime-B-001",
+            "action": "SEND_MESSAGE",
+            "requested_permission": "message:send",
+        }
+
+        with pytest.raises(HTTPError) as error:
+            post_json(base + "/api/edge-requests", payload)
+
+        assert error.value.code == 500
+        error.value.close()
+
+        snapshot = runtime.dashboard_provider()
+        assert snapshot["event_queue"]["pending_events"] == 0
+
     finally:
         server.shutdown()
         server.server_close()

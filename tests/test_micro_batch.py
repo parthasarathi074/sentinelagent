@@ -373,5 +373,48 @@ class TestMicroBatchProcessor(unittest.TestCase):
         self.assertEqual(len(processed_batches), 1)
 
 
+def test_persistent_batch_failure_records_error_type(tmp_path):
+    from sentinelagent.persistent_audit import PersistentAuditTrail
+    from sentinelagent.persistent_event_stream import PersistentEventStream
+    from sentinelagent.micro_batch import MicroBatchProcessor
+
+    database = tmp_path / "micro-batch-audit.sqlite3"
+    audit = PersistentAuditTrail(database)
+    stream = PersistentEventStream(database, audit_trail=audit)
+
+    def failing_handler(batch):
+        raise RuntimeError("simulated processing failure")
+
+    try:
+        stream.publish({"event": "test"})
+
+        processor = MicroBatchProcessor(
+            event_stream=stream,
+            batch_size=1,
+            batch_handler=failing_handler,
+        )
+
+        try:
+            processor.process_once()
+        except RuntimeError as exc:
+            assert str(exc) == "simulated processing failure"
+        else:
+            raise AssertionError("Expected processing failure")
+
+        records = list(reversed(audit.list_recent()))
+        event_types = [record["event_type"] for record in records]
+
+        assert event_types == [
+            "BATCH_PROCESSING_STARTED",
+            "BATCH_PROCESSING_FAILED",
+        ]
+        assert records[-1]["error_type"] == "RuntimeError"
+        assert stream.size() == 1
+        assert audit.verify_integrity()
+    finally:
+        stream.close()
+        audit.close()
+
+
 if __name__ == "__main__":
     unittest.main()

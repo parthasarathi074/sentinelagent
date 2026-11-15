@@ -16,6 +16,7 @@ from run_live_runtime import seed_missing_agents  # noqa: E402
 from sentinelagent.live_dashboard import LiveDashboardSnapshotProvider  # noqa: E402
 from sentinelagent.models import utc_now  # noqa: E402
 from sentinelagent.persistent_audit import PersistentAuditTrail  # noqa: E402
+from sentinelagent.persistent_event_stream import PersistentEventStream  # noqa: E402
 from sentinelagent.registry import AgentRegistry  # noqa: E402
 from sentinelagent.runtime_server import LocalSentinelRuntime, create_runtime_server  # noqa: E402
 
@@ -24,14 +25,52 @@ def _safe_text(value: Any, max_length: int = 512) -> str | None:
     if not isinstance(value, str):
         return None
     return value[:max_length]
+def _build_edge_audit_event(event: dict[str, Any]) -> dict[str, Any]:
+    """Build an allowlisted authorization audit record from an edge event."""
+    source = event.get("source_agent")
+    target = event.get("target_agent")
+
+    if not isinstance(source, dict):
+        source = {}
+    if not isinstance(target, dict):
+        target = {}
+
+    return {
+        "event_type": "EDGE_AUTHORIZATION",
+        "captured_at": utc_now(),
+        "request_id": _safe_text(event.get("request_id")),
+        "trace_id": _safe_text(event.get("trace_id")),
+        "edge_id": _safe_text(event.get("edge_id")),
+        "source_runtime_id": _safe_text(source.get("runtime_id")),
+        "target_runtime_id": _safe_text(target.get("runtime_id")),
+        "action": _safe_text(event.get("action")),
+        "requested_permission": _safe_text(
+            event.get("requested_permission")
+        ),
+        "resource_id": _safe_text(event.get("resource_id")),
+        "decision": _safe_text(event.get("decision")),
+        "reason": _safe_text(event.get("decision_reason")),
+        "accepted": True,
+        "event_queued": True,
+    }
 
 
 class AuditedLocalSentinelRuntime(LocalSentinelRuntime):
     """Local runtime that durably records every valid edge authorization result."""
 
     def __init__(self, registry: AgentRegistry, audit_trail: PersistentAuditTrail, **kwargs: Any) -> None:
-        super().__init__(registry, **kwargs)
         self.audit_trail = audit_trail
+        event_stream = PersistentEventStream(
+            audit_trail.database_path,
+            audit_trail=audit_trail,
+            audit_event_factory=_build_edge_audit_event,
+        )
+
+        super().__init__(
+            registry,
+            event_stream=event_stream,
+            **kwargs,
+        )
         # The provider must use the same pipeline and registry instances as the
         # request handler so the dashboard shows both live state and durable logs.
         self.dashboard_provider = LiveDashboardSnapshotProvider(
@@ -42,15 +81,24 @@ class AuditedLocalSentinelRuntime(LocalSentinelRuntime):
 
     def submit_edge_request(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
-            response = super().submit_edge_request(payload)
+            return super().submit_edge_request(payload)
+
         except Exception as exc:
-            self.audit_trail.record({
-                "event_type": "EDGE_REQUEST_ERROR",
-                "captured_at": utc_now(),
-                "request_id": _safe_text(payload.get("request_id")),
-                "edge_id": _safe_text(payload.get("edge_id")),
-                "error_type": type(exc).__name__,
-            })
+            try:
+                self.audit_trail.record({
+                    "event_type": "EDGE_REQUEST_ERROR",
+                    "captured_at": utc_now(),
+                    "request_id": _safe_text(payload.get("request_id")),
+                    "edge_id": _safe_text(payload.get("edge_id")),
+                    "error_type": type(exc).__name__,
+                })
+            except Exception as audit_exc:
+                logging.error(
+                    "sentinel_runtime_error_audit_error "
+                    "original_error_type=%s audit_error_type=%s",
+                    type(exc).__name__,
+                    type(audit_exc).__name__,
+                )
             raise
 
         # Allowlist only: never store request bodies, credentials, or arbitrary

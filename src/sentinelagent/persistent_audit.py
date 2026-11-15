@@ -70,47 +70,85 @@ class PersistentAuditTrail:
                 self._connection.close()
                 raise ValueError("Audit trail integrity check failed")
 
-    def record(self, event: dict[str, Any]) -> dict[str, Any]:
-        """Append one event and return its durable audit ID and chain hash."""
+
+    def record_in_transaction(
+        self,
+        connection: sqlite3.Connection,
+        event: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Append an audit entry inside a caller-owned SQLite transaction.
+
+        The caller is responsible for beginning, committing, or rolling back
+        the transaction. This allows event and audit writes to be atomic.
+        """
         if not isinstance(event, dict):
             raise TypeError("event must be a dictionary")
+
         safe_event = dict(event)
         safe_event.setdefault("captured_at", utc_now())
+
         if not isinstance(safe_event.get("captured_at"), str):
             raise ValueError("event captured_at must be a string")
-        if not isinstance(safe_event.get("event_type"), str) or not safe_event["event_type"].strip():
+
+        if (
+            not isinstance(safe_event.get("event_type"), str)
+            or not safe_event["event_type"].strip()
+        ):
             raise ValueError("event_type must be a non-empty string")
+
         event_json = _canonical_json(safe_event)
 
         with self._lock:
+            row = connection.execute(
+                """
+                SELECT event_hash
+                FROM audit_entries
+                ORDER BY audit_id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+
+            previous_hash = row[0] if row else _GENESIS_HASH
+            event_hash = _entry_hash(previous_hash, event_json)
+
+            cursor = connection.execute(
+                """
+                INSERT INTO audit_entries
+                    (captured_at, event_json, previous_hash, event_hash)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    safe_event["captured_at"],
+                    event_json,
+                    previous_hash,
+                    event_hash,
+                ),
+            )
+
+            return {
+                **safe_event,
+                "audit_id": int(cursor.lastrowid),
+                "previous_hash": previous_hash,
+                "event_hash": event_hash,
+            }
+
+    def record(self, event: dict[str, Any]) -> dict[str, Any]:
+        """Append one event in its own transaction."""
+        with self._lock:
             connection = self._connection
             connection.execute("BEGIN IMMEDIATE")
+
             try:
-                row = connection.execute(
-                    "SELECT event_hash FROM audit_entries ORDER BY audit_id DESC LIMIT 1"
-                ).fetchone()
-                previous_hash = row[0] if row else _GENESIS_HASH
-                event_hash = _entry_hash(previous_hash, event_json)
-                cursor = connection.execute(
-                    """
-                    INSERT INTO audit_entries
-                        (captured_at, event_json, previous_hash, event_hash)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (safe_event["captured_at"], event_json, previous_hash, event_hash),
-                )
-                audit_id = int(cursor.lastrowid)
+                result = self.record_in_transaction(connection, event)
                 connection.execute("COMMIT")
+                return result
             except Exception:
-                connection.execute("ROLLBACK")
+                try:
+                    connection.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
                 raise
 
-        return {
-            **safe_event,
-            "audit_id": audit_id,
-            "previous_hash": previous_hash,
-            "event_hash": event_hash,
-        }
 
     def list_recent(self, limit: int = 100) -> list[dict[str, Any]]:
         """Return up to ``limit`` newest records, newest first."""
